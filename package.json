@@ -1,0 +1,64 @@
+{
+  "name": "dsh-linghun-memory",
+  "version": "0.0.1",
+  "description": "灵魂的记忆体方案（记忆完全本体化）：写侧结构化三型条目（event 记忆本体 / fact 知识本体 / rule 规则本体）+ 读侧 warm 按 kind 分组原生渲染三本体；序时账留痕、情景归档、低置信降权遗忘；memory_append / memory_read / memory_consolidate 读写沉淀闭环。不是人设卡，是判断力——给 DeepSeek Harness 装上收口器。",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dsh": ">=0.1.0-rc.7 <0.3.0",
+      "node": ">=20.18",
+      "profiles": [
+        "web"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "ontology.js",
+    "identity.js",
+    "memory.js",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh.md",
+    "LICENSE"
+  ],
+  "homepage": "https://github.com/syyr1987/dsh-linghun-memory",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "soul",
+    "cognition",
+    "memory",
+    "hippocampus",
+    "cognitive-agent"
+  ],
+  "license": "AGPL-3.0",
+  "engines": {
+    "node": ">=20.18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/syyr1987/dsh-linghun-memory.git"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.7 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-settings": "^0.1.0-rc.7 || ^0.2.0-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.7 || ^0.2.0-rc.1"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  },
+  "author": "syyr1987"
+}

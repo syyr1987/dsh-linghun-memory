@@ -1,0 +1,6 @@
+# dsh-linghun — 灵魂（Linghun）Cordis 挂载声明
+#
+# 标准 profile bundle：`dsh plugin --profile <p> add dsh-linghun` 即可安装挂载。
+- insert:
+    - id: linghun
+      name: 'dsh-linghun'
