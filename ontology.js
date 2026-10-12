@@ -90,12 +90,75 @@ export function writeOntologySafe(path, text) {
 /** 规则本体追加（BEAM 三本体方案·规则本体）：把一条总结经验追加进 rules.md。
  *  格式与 ontology 同构（## 主题节点），命中同主题节点 → 追加一行；否则新建节点。
  *  规则是稳定的长期经验（矛盾不硬裁/查证纪律等），不是一次性事实。
- *  返回 { ok, changed, path, theme }；失败返回 { ok:false, reason }。 */
+ *  返回 { ok, changed, path, theme }；失败返回 { ok:false, reason }。
+ *
+ *  v0.1.0 升级：签名分桶（BEAM v2.6 机制回灌）。topic 形如
+ *  `[题型域|子题型|工具|错误码] 中文名`（或直接 `题型域|子题型|工具|错误码`）时，
+ *  写入 `### 桶 <签名>（<中文名>）` 桶块——把「题型的抽象关系结构」工程化为签名桶；
+ *  普通 topic 维持旧 `## 主题` 节点，两者可共存。 */
+const SIGNATURE_RE = /^\[([^\]]+)\]\s*(.*)$/;
+
+/** 按块边界切 rules.md：`### 桶 ` 与 `## ` 都是块头。 */
+function splitRuleBlocks(text) {
+  const parts = [];
+  let cur = null;
+  for (const ln of String(text).split("\n")) {
+    const s = ln.trim();
+    if (s.startsWith("### 桶 ") || s.startsWith("## ")) {
+      if (cur) parts.push(cur.join("\n"));
+      cur = [s];
+    } else if (cur) {
+      cur.push(ln);
+    }
+  }
+  if (cur) parts.push(cur.join("\n"));
+  return parts;
+}
+
+/** 解析 rules.md 为块数组：{ kind: "bucket"|"theme", name, header, body }。
+ *  签名桶（### 桶 <签名>（<中文名>））整桶作为一个注入块（签名+关系结构+实例证据+归纳）。 */
+export function parseRulesBuckets(text) {
+  return splitRuleBlocks(String(text ?? "")).map((block) => {
+    const firstLine = block.split("\n")[0] ?? "";
+    const body = block.replace(/^.*\n/, "").trim();
+    if (firstLine.startsWith("### 桶 ")) {
+      return { kind: "bucket", name: firstLine.replace(/^### 桶\s+/, "").trim(), header: firstLine, body };
+    }
+    return { kind: "theme", name: firstLine.replace(/^##\s+/, "").trim(), header: firstLine, body };
+  });
+}
+
+/** 判断 topic 是否为签名桶：`[签名|含|管道] 中文名` 或裸签名（含 | 分隔符）。
+ *  单括号无管道（如 [推理题]）不是签名，维持普通主题。 */
+export function isSignatureTopic(topic) {
+  const raw = String(topic ?? "").trim();
+  if (!raw) return false;
+  const m = raw.match(SIGNATURE_RE);
+  if (m && m[1].includes("|")) return true;
+  return raw.split("|").length >= 2;
+}
+
+/** 从签名 topic 解析桶头：`[签名] 中文名` → `### 桶 [签名]（中文名）`，签名保留方括号（v2.6 桶头格式）。 */
+export function bucketHeaderForTopic(topic) {
+  const raw = String(topic ?? "").trim();
+  const m = raw.match(SIGNATURE_RE);
+  if (m && m[1].includes("|")) {
+    const cn = m[2].trim();
+    return cn ? `### 桶 [${m[1].trim()}]（${cn}）` : `### 桶 [${m[1].trim()}]`;
+  }
+  return `### 桶 ${raw}`;
+}
+
 export function appendRulesSafe(path, topic, rule, stamp) {
-  const theme = String(topic ?? "").trim() || "经验规则";
+  const rawTopic = String(topic ?? "").trim() || "经验规则";
   const content = String(rule ?? "").trim();
   if (!content) return { ok: false, reason: "rule 为空" };
   const line = `- ${content}${stamp ? `（${stamp}）` : ""}`;
+  const isBucket = isSignatureTopic(rawTopic);
+  const header = isBucket ? bucketHeaderForTopic(rawTopic) : `## ${rawTopic}`;
+  const matchKey = header.startsWith("### 桶 ")
+    ? header.replace(/^### 桶\s+/, "").replace(/（.*）$/, "")
+    : rawTopic;
   try {
     let text = "";
     try {
@@ -104,18 +167,19 @@ export function appendRulesSafe(path, topic, rule, stamp) {
       /* 文件不存在 */
     }
     const blocks = text.trim()
-      ? String(text).split(/\n(?=## )/).map((b) => b.trim()).filter(Boolean)
+      ? splitRuleBlocks(text)
       : [];
-    const idx = blocks.findIndex((b) => b.startsWith(`## ${theme}`));
+    const prefix = isBucket ? "### 桶 " : "## ";
+    const idx = blocks.findIndex((b) => b.startsWith(`${prefix}${matchKey}`));
     if (idx >= 0) {
       blocks[idx] = `${blocks[idx].trimEnd()}\n${line}`;
     } else {
-      blocks.push(`## ${theme}\n${line}`);
+      blocks.push(`${header}\n${line}`);
     }
     const next = `${blocks.join("\n\n")}\n`;
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, next, "utf8");
-    return { ok: true, changed: true, path, theme };
+    return { ok: true, changed: true, path, theme: matchKey };
   } catch (err) {
     return { ok: false, reason: String(err?.message ?? err) };
   }
@@ -129,4 +193,7 @@ export default {
   hitThemeByAlias,
   writeOntologySafe,
   appendRulesSafe,
+  parseRulesBuckets,
+  isSignatureTopic,
+  bucketHeaderForTopic,
 };

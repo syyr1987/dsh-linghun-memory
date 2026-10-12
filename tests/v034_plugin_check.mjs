@@ -37,7 +37,7 @@ check(judgeText.includes("漂移信号清单与误杀锚点见判分领域规则
 check(!judgeText.includes("进谏协议") && !judgeText.includes("CONFIRMED") && !judgeText.includes("言官"), "judgment 无进谏协议/CONFIRMED/言官");
 
 // 3. 工具清单：5 个海马体/灵魂工具，无 yanguan_audit/review
-const expected = ["memory_append", "memory_read", "memory_consolidate", "soul_read", "soul_update"];
+const expected = ["linghun_memory_append", "linghun_memory_read", "linghun_memory_consolidate", "linghun_soul_read", "linghun_soul_update"];
 check(expected.every((n) => toolNames.includes(n)), "五工具在场: " + toolNames.sort().join(","));
 check(!toolNames.includes("yanguan_audit") && !toolNames.includes("yanguan_review"), "无 yanguan_audit/yanguan_review");
 check(!toolNames.includes("journal_read") || true, "(journal_read 存在与否不影响 v0.3.4 目标)");

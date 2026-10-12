@@ -324,22 +324,35 @@ test("time: parseAssessment 解析 TOUCH 行（自动时间管理）", () => {
     "experience：embedding 失败要 fail-closed。",
     "TOUCH: 贝叶斯更新 | 用户喜欢短句",
   ].join("\n");
-  const { entry, touches } = parseAssessment(out);
-  assert.equal(entry.kind, "event", "experience 旧类别映射为 event（发生了什么）");
+  const { entries, touches } = parseAssessment(out);
+  assert.equal(entries.length, 1, "experience 旧类别映射为 event（发生了什么）");
+  assert.equal(entries[0].kind, "event");
   assert.deepEqual(touches, ["贝叶斯更新", "用户喜欢短句"]);
 });
 
 test("time: parseAssessment SKIP 时不沉淀但保留 TOUCH", () => {
-  const { entry, touches } = parseAssessment("SKIP\nTOUCH: 插件全开源");
-  assert.equal(entry, null);
+  const { entries, touches } = parseAssessment("SKIP\nTOUCH: 插件全开源");
+  assert.deepEqual(entries, []);
   assert.deepEqual(touches, ["插件全开源"]);
 });
 
 test("time: parseAssessment 空输出返回空，普通条目无 TOUCH", () => {
-  assert.deepEqual(parseAssessment(""), { entry: null, touches: [] });
-  const { entry, touches } = parseAssessment("fact：普通条目");
-  assert.equal(entry.kind, "fact");
+  assert.deepEqual(parseAssessment(""), { entries: [], touches: [] });
+  const { entries, touches } = parseAssessment("fact：普通条目");
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].kind, "fact");
   assert.deepEqual(touches, []);
+});
+
+test("time: parseAssessment 全量记录协议解析多条条目", () => {
+  const out = [
+    "event：Caroline | refused to spread rumor | about colleague | privacy/reputation | one-off stance",
+    "fact：Caroline | chronic headache | dims lights by 6pm | batch5",
+    "rule：对话中用户明确表达的一次性立场也要沉淀为 event，不因一次性而跳过",
+  ].join("\n");
+  const { entries } = parseAssessment(out);
+  assert.equal(entries.length, 3, "每轮可多条沉淀，不再只取第一条");
+  assert.deepEqual(entries.map((e) => e.kind), ["event", "fact", "rule"]);
 });
 
 // ── index.js 导出与配置 ─────────────────────────────────────────────────
@@ -351,7 +364,7 @@ test("index: 导出 Cordis 插件契约", () => {
   assert.ok(Config);
 });
 
-test("index: 三个 prompt section 均关闭模板插值（interpolate:false，防 {{ }} 毒化）", () => {
+test("index: 默认模式只注册记忆 section（soul:linghun-memory，命名空间与旧线隔离）", () => {
   const sections = [];
   const ctx = {
     systemPrompt: {
@@ -375,9 +388,10 @@ test("index: 三个 prompt section 均关闭模板插值（interpolate:false，�
     else process.env.DSH_HOME = oldHome;
   }
   const names = sections.map((s) => s.name);
-  for (const n of ["soul:identity", "soul:judgment", "soul:memory"]) {
-    assert.ok(names.includes(n), `应注册 section ${n}`);
-  }
+  assert.ok(names.includes("soul:linghun-memory"), "应注册记忆 section（soul:linghun-memory）");
+  assert.ok(!names.includes("soul:identity"), "默认模式不注册 soul:identity（与旧线隔离）");
+  assert.ok(!names.includes("soul:judgment"), "默认模式不注册 soul:judgment（与旧线隔离）");
+  assert.ok(!names.includes("soul:memory"), "不得使用旧线 soul:memory 命名空间");
   for (const s of sections) {
     assert.equal(s.interpolate, false, `${s.name} 必须设置 interpolate:false（纯文本注入）`);
     assert.equal(typeof s.text, "function", `${s.name} 的 text 应为 function`);
@@ -554,7 +568,7 @@ test("index: memory.assembler.injectPath 注入素材包，且优先于环境变
     const sections = harnessWithSections(
       Config({ memory: { assembler: { injectPath: asmFile } } }),
     );
-    const mem = sections.find((s) => s.name === "soul:memory");
+    const mem = sections.find((s) => s.name === "soul:linghun-memory");
     assert.ok(mem, "应注册 soul:memory section");
     const out = mem.text();
     assert.ok(out.includes("组装素材包"), "应注入素材包内容");
@@ -577,7 +591,7 @@ test("index: LINGHUN_MEMORY_OVERRIDE 环境变量兼容（未配置 injectPath �
   process.env.LINGHUN_MEMORY_OVERRIDE = envFile;
   try {
     const sections = harnessWithSections(Config(undefined));
-    const mem = sections.find((s) => s.name === "soul:memory");
+    const mem = sections.find((s) => s.name === "soul:linghun-memory");
     const out = mem.text();
     assert.ok(out.includes("OpenWeather API key 已配置"), "环境变量素材包应生效");
   } finally {
@@ -590,7 +604,7 @@ test("index: 素材包文件不可读时回退默认注入（不崩溃）", () =
   const sections = harnessWithSections(
     Config({ memory: { assembler: { injectPath: "/nonexistent/assembled.md" } } }),
   );
-  const mem = sections.find((s) => s.name === "soul:memory");
+  const mem = sections.find((s) => s.name === "soul:linghun-memory");
   const out = mem.text();
   assert.equal(typeof out, "string");
   assert.ok(!out.includes("undefined"), "不可读路径不得渲染 undefined");
@@ -641,7 +655,7 @@ test("conf: warm maxBytes 默认与注入预算同量级（F5）", () => {
 // ── 团队认知台账（assembler 认知循环团队共享，v0.2.14）─────────────────────
 test("team: memory_read 含团队认知台账段（共享子智能体领域）", async () => {
   const { tools, dshHome, withEnvAsync } = harnessCollect(undefined);
-  const read = tools.find((t) => t.name === "memory_read");
+  const read = tools.find((t) => t.name === "linghun_memory_read");
   assert.ok(read, "应注册 memory_read 工具");
 
   const teamDir = join(dshHome, "linghun", "memory", "team");
@@ -694,7 +708,7 @@ test("team: memory_read 含团队认知台账段（共享子智能体领域）",
 
 test("team: memory_read 无团队文件时正常（不出现团队段）", async () => {
   const { tools, withEnvAsync } = harnessCollect(undefined);
-  const read = tools.find((t) => t.name === "memory_read");
+  const read = tools.find((t) => t.name === "linghun_memory_read");
   const out = await withEnvAsync(() => read.execute({}, {}));
   assert.ok(!out.content.includes("团队认知台账"), "无团队文件不得渲染团队段");
 });
@@ -791,7 +805,7 @@ test("fix: memory_consolidate 同日二次 append 不覆盖（F3）", async () =
   const { tools, home, withEnvAsync } = harnessCollect(undefined);
   const memDir = join(home, ".dsh", "linghun", "memory");
   const warmFile = join(memDir, "warm.md");
-  const consolidated = tools.find((t) => t.name === "memory_consolidate");
+  const consolidated = tools.find((t) => t.name === "linghun_memory_consolidate");
   assert.ok(consolidated, "应注册 memory_consolidate 工具");
   await withEnvAsync(async () => {
     mkdirSync(memDir, { recursive: true });
@@ -811,7 +825,7 @@ test("fix: 沉淀后 cold 只含摘要与指针，不倾倒原文（F4·legacy �
   const { tools, home, withEnvAsync } = harnessCollect(undefined);
   const memDir = join(home, ".dsh", "linghun", "memory");
   const warmFile = join(memDir, "warm.md");
-  const consolidated = tools.find((t) => t.name === "memory_consolidate");
+  const consolidated = tools.find((t) => t.name === "linghun_memory_consolidate");
   await withEnvAsync(async () => {
     mkdirSync(memDir, { recursive: true });
     writeFileSync(warmFile, "## 2026-09-29 [legacy] medium\n\n核心知识细节很长，" + "Y".repeat(500) + "\n", "utf8");
@@ -827,7 +841,7 @@ test("fix: 沉淀三本体分流——event→记忆本体 / fact high→知识�
   const { tools, home, withEnvAsync } = harnessCollect(undefined);
   const memDir = join(home, ".dsh", "linghun", "memory");
   const warmFile = join(memDir, "warm.md");
-  const consolidated = tools.find((t) => t.name === "memory_consolidate");
+  const consolidated = tools.find((t) => t.name === "linghun_memory_consolidate");
   await withEnvAsync(async () => {
     mkdirSync(memDir, { recursive: true });
     writeFileSync(

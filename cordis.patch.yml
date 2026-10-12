@@ -1,6 +1,8 @@
-# dsh-linghun — 灵魂（Linghun）Cordis 挂载声明
+# dsh-linghun-memory — 灵魂记忆（记忆体线）Cordis 挂载声明
 #
-# 标准 profile bundle：`dsh plugin --profile <p> add dsh-linghun` 即可安装挂载。
+# 标准 profile bundle：`dsh plugin --profile <p> add dsh-linghun-memory` 即可安装挂载。
+# 装配标识独立为 linghun-memory，与原 dsh-linghun（id: linghun）分开，
+# 两条线可在同一 profile 并存、互不覆盖。
 - insert:
-    - id: linghun
-      name: 'dsh-linghun'
+    - id: linghun-memory
+      name: 'dsh-linghun-memory'

@@ -7,11 +7,11 @@
  * prompt sections:
  *   soul:identity  — 灵魂卡（身份锚点：收口者架构）
  *   soul:judgment  — 判断纪律（边界扫描）
- *   soul:memory    — 海马体记忆注入（冷储摘要·高频高抽象经验 + 归档/序时账索引；暖态近期由 memory_read 按需读）
+ *   soul:memory    — 海马体记忆注入（冷储摘要·高频高抽象经验 + 归档/序时账索引；暖态近期由 linghun_memory_read 按需读）
  *
  * tools:
- *   soul_read / soul_update      — 灵魂自进化（读/更新自己的灵魂卡）
- *   memory_append / memory_read / memory_consolidate — 海马体（记/读/沉淀）
+ *   linghun_soul_read / linghun_soul_update      — 灵魂自进化（读/更新自己的灵魂卡）
+ *   linghun_memory_append / linghun_memory_read / linghun_memory_consolidate — 海马体（记/读/沉淀）
  */
 import { readFileSync, statSync } from "node:fs";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
@@ -29,7 +29,9 @@ const NS = "linghun";
 
 const SECTION_IDENTITY = "soul:identity";
 const SECTION_JUDGMENT = "soul:judgment";
-const SECTION_MEMORY = "soul:memory";
+// 记忆体线 section 命名空间独立：与旧线 dsh-linghun 的 soul:memory 隔离，
+// 两条线并存时 prompt section 不冲突。
+const SECTION_MEMORY = "soul:linghun-memory";
 
 const MEMORY_DIR = join("linghun", "memory");
 /** 用户人设文件：$DSH_HOME/linghun/identity.md —— 用户自己写人设的地方，文件优先。 */
@@ -55,7 +57,7 @@ const Config = z.object({
     enabled: z.boolean().default(true),
     /** 段落顺序：数字越小越靠前（多 section 模式下控制先后）。 */
     order: z.number().default(0),
-    /** soul_update 拒绝超过此大小（字节）。 */
+    /** linghun_soul_update 拒绝超过此大小（字节）。 */
     maxBytes: z.number().default(64 * 1024),
     /** 灵魂卡覆盖模式：complete=true 时 soul:identity 注册为 dsh-system-prompt 的
      *  complete section（装配后唯一保留），覆盖 DSH 底座默认身份指涉；
@@ -81,7 +83,7 @@ const Config = z.object({
     /** 时间权重：暖态注入按 last_access（最后一次被调用）新→旧排序，吃灰的沉底被裁出注入。 */
     timeWeight: z.boolean().default(true),
     /** 暖态注入开关：默认 false——注入段只承载高频高抽象经验（冷储摘要/归档索引），
-     *  暖态近期记忆由 memory_read 按需读取；true 时追加「近期记忆」注入段（特殊场景）。 */
+     *  暖态近期记忆由 linghun_memory_read 按需读取；true 时追加「近期记忆」注入段（特殊场景）。 */
     injectWarm: z.boolean().default(false),
     /** 暖态记忆体积上限：与注入预算（injectMaxChars 默认 6000 字）同量级对齐，
      *  避免 warm 可合法涨到 1MB 而 98% 结构性进不了注入（F5：autoConsolidate 死代码）。 */
@@ -91,8 +93,8 @@ const Config = z.object({
       enabled: z.boolean().default(true),
       /** 送入评估的对话文本上限（字符）。 */
       maxChars: z.number().default(4000),
-      /** 评估输出上限（token）。 */
-      maxTokens: z.number().default(300),
+      /** 评估输出上限（token）：全量记录协议下每轮可多条，默认放宽到 800。 */
+      maxTokens: z.number().default(800),
       /** 评估采样温度：低温度更稳定，不容易误判该沉淀/不该沉淀。 */
       temperature: z.number().default(0.2),
     }).default({}),
@@ -109,7 +111,7 @@ const Config = z.object({
       injectPath: z.string().default(""),
       label: z.string().default("以下记忆素材由提取子智能体按当前问题从记忆库组装（仅保留相关条目，细节原样）"),
     }).default({}),
-    /** 记忆本体投影（BEAM 机制回灌）：memory_project 把 warm 按主题桶 LLM 聚合 → ontology.md，
+    /** 记忆本体投影（BEAM 机制回灌）：linghun_memory_project 把 warm 按主题桶 LLM 聚合 → ontology.md，
      *  供 linghun-assembler 检索「本体主题索引优先 + BM25 兜底」。 */
     ontology: z.object({
       /** 主题桶：LLM 聚合时的分组提示。空=由 LLM 自主聚类；给桶名则按桶聚合。 */
@@ -121,11 +123,25 @@ const Config = z.object({
       /** 投影文件路径：默认 $DSH_HOME/linghun/memory/ontology.md。 */
       path: z.string().default(""),
     }).default({}),
-    /** 规则本体（BEAM 三本体方案·规则本体）：memory_rules 把总结经验追加进 rules.md，
-     *  供 linghun-assembler 检索「R_ALIAS 规则别名命中注入」。规则是长期经验（矛盾不硬裁/查证纪律等）。 */
+    /** 规则本体（BEAM 三本体方案·规则本体）：linghun_memory_rules 把总结经验追加进 rules.md，
+     *  供 linghun-assembler 检索「R_ALIAS 规则别名命中注入」。规则是长期经验（矛盾不硬裁/查证纪律等）。
+     *  v0.1.0：支持签名分桶——topic 传 `[题型域|子题型|工具|错误码] 中文名` 写入 ### 桶 块。 */
     rules: z.object({
       /** 规则本体文件路径：默认 $DSH_HOME/linghun/memory/rules.md。 */
       path: z.string().default(""),
+    }).default({}),
+    /** MMR 排重（BEAM v2.6 机制回灌）：暖态近期记忆注入前做多样性重排——
+     *  候选按「置信×新鲜度」打分，贪心 λ·rel − (1−λ)·max_sim（token Jaccard）砍同类冗余。
+     *  默认开，λ=0.85 相关优先、阈值 0.2 保守（只砍明显冗余/低相关），保底取最高分。 */
+    mmr: z.object({
+      /** MMR 排重开关：false 则暖态注入回到纯排序截断。 */
+      enabled: z.boolean().default(true),
+      /** 保留条数上限（对标 v2.6 情境内 ≤6）。 */
+      k: z.number().default(6),
+      /** 相关优先权重：λ 越大越看重相关度，越小越看重多样性。 */
+      lambda: z.number().default(0.85),
+      /** 相对阈值截断：低于池顶 score×topCutoff 的候选不参与（防低相关混入）。 */
+      topCutoff: z.number().default(0.2),
     }).default({}),
   }),
 });
@@ -149,12 +165,13 @@ const PROJECTION_PROMPT =
 /** 收尾评估系统提示（写侧协议 v1）：评估输出三类结构化条目（event/fact/rule），不写叙述段。
  *  历史 bug：此字符串曾缺失 const 声明成为死代码，导致 ASSESS_SYSTEM 未定义、收尾评估被 catch 静默吞掉。 */
 const ASSESS_SYSTEM =
-  "你是海马体记忆管家。你的任务：阅读一段刚结束的对话，判断其中是否有值得跨会话保留的记忆条目，以及对话中用到了哪些已有记忆。\n\n" +
-  "值得记的：明确的事件（发生了什么）、精确事实（是什么/多少，含数字日期版本）、可执行规则（该怎么做：决策/偏好/经验纪律）。\n" +
-  "不值得记的：日常寒暄、一次性问答、可即时查询的常识、情绪化表达。\n\n" +
+  "你是海马体记忆管家。你的任务：阅读一段刚结束的对话，把对话中**发生的、用户表达的**内容全量沉淀为记忆条目（记忆本体=时间线，发生过就记，不判断价值）；" +
+  "同时识别对话中用到了哪些已有记忆。\n\n" +
+  "全量记的：明确的事件（发生了什么）、用户表达的状态/约束/偏好/目标/价值观/因果（哪怕一句话带过、哪怕看似一次性）、精确事实（是什么/多少，含数字日期版本）、可执行规则（该怎么做）。\n" +
+  "只跳过：纯寒暄（你好/再见/天气/客套）、无任何信息量的语气词。\n\n" +
   "输出格式（严格遵守）：\n" +
-  "- 没有值得记的 → 只输出 SKIP\n" +
-  "- 有值得记的 → 输出 1-3 条，每条一行：类别：内容\n" +
+  "- 全是纯寒暄、无任何可记内容 → 只输出 SKIP\n" +
+  "- 否则输出全部条目，每条一行：类别：内容（不要限条数，宁可多记）\n" +
   "  类别 ∈ event（事件）/ fact（事实，含精确值）/ rule（规则/决策/偏好，一句话可执行）\n" +
   "  event 内容写结构行：主语 | 动作 | 宾语 | 关联实体 | 细节\n" +
   "  fact 内容写结构行：实体 | 属性 | 值 | 来源#（值必须精确：数字/日期/版本）\n" +
@@ -162,18 +179,19 @@ const ASSESS_SYSTEM =
   "- 对话中实际用到了【已有记忆】里的条目 → 另起一行输出：TOUCH: 片段1 | 片段2\n" +
   "  片段取该条记忆中的一段原文（越独特越好）；没用到任何已有记忆则省略此行。";
 
-/** 解析收尾评估输出：{ entry, touches }。entry 为值得沉淀的条目（无则 null）；touches 为用到的已有记忆片段列表。
+/** 解析收尾评估输出：{ entries, touches }。entries 为全部沉淀条目（全量记录协议 v2：每轮可多条）；
+ *  touches 为用到的已有记忆片段列表。
  *  kind 三型（event/fact/rule）；兼容旧类别（decision/preference→rule，experience→event，identity→fact）。 */
 function parseAssessment(text) {
   const t = (text ?? "").trim();
-  if (!t) return { entry: null, touches: [] };
+  if (!t) return { entries: [], touches: [] };
   const skip = t.toUpperCase().includes("SKIP");
   const lines = t
     .split("\n")
     .map((l) => l.trim())
     .filter(Boolean)
     .filter((l) => !/^[-*•]?\s*(类别|输出|对话|已有)/.test(l));
-  let entry = null;
+  const entries = [];
   const touches = [];
   for (const line of lines) {
     const touchM = line.match(/^TOUCH[：:]\s*(.+)$/i);
@@ -188,7 +206,7 @@ function parseAssessment(text) {
     }
     if (skip) continue;
     const m = line.match(/^(event|fact|rule|decision|preference|experience|identity)[：:]\s*(.+)$/i);
-    if (m && !entry) {
+    if (m) {
       const raw = m[1].toLowerCase();
       const kind =
         raw === "decision" || raw === "preference"
@@ -198,12 +216,12 @@ function parseAssessment(text) {
             : raw === "identity"
               ? "fact"
               : raw;
-      entry = { kind, content: m[2].trim() };
-    } else if (line.length > 4 && !entry) {
-      entry = { kind: "fact", content: line };
+      entries.push({ kind, content: m[2].trim() });
+    } else if (line.length > 4) {
+      entries.push({ kind: "fact", content: line });
     }
   }
-  return { entry, touches };
+  return { entries, touches };
 }
 
 function apply(ctx, config) {
@@ -346,6 +364,7 @@ function apply(ctx, config) {
     const rendered = layout.renderForInject(c.memory?.injectMaxChars, {
       timeWeight: c.memory?.timeWeight,
       injectWarm: c.memory?.injectWarm,
+      mmr: c.memory?.mmr,
     });
     if (!rendered) return "";
     return `${MEMORY_DISCIPLINE}\n\n${rendered}`;
@@ -375,18 +394,9 @@ function apply(ctx, config) {
       });
       return;
     }
-    sectionDisposers.identity = ctx.systemPrompt.section({
-      name: SECTION_IDENTITY,
-      order: cfg().identity?.order ?? 0,
-      text: renderIdentity,
-      interpolate: false,
-    });
-    sectionDisposers.judgment = ctx.systemPrompt.section({
-      name: SECTION_JUDGMENT,
-      order: cfg().judgment?.order ?? 0.2,
-      text: renderJudgment,
-      interpolate: false,
-    });
+    // 默认模式：记忆体线只注册记忆 section（soul:linghun-memory）。
+    // 身份/判断 section 由旧线 dsh-linghun（灵魂卡）或底座提供——两条线并存不冲突；
+    // standalone 用完整灵魂卡时走上方 identity.complete 覆盖模式。
     sectionDisposers.memory = ctx.systemPrompt.section({
       name: SECTION_MEMORY,
       order: cfg().memory?.order ?? 0.5,
@@ -628,7 +638,7 @@ function apply(ctx, config) {
     const conf = ["high", "medium", "low"].includes(opts.confidence) ? opts.confidence : "medium";
     const err = validateEntryFormat(kindNorm, content);
     if (err) {
-      throw new Error(`memory_append: ${err}`);
+      throw new Error(`linghun_memory_append: ${err}`);
     }
     const block = `\n## ${stamp} [${kindNorm}] ${conf}\n\n${content}\n<!-- last_access: ${stamp} -->\n`;
     const file = layout.warmFile();
@@ -681,7 +691,7 @@ function apply(ctx, config) {
       }
     }
     if (total > max) {
-      throw new Error(`memory_append: 记忆超过上限（${max} 字节），先执行 memory_consolidate 沉淀`);
+      throw new Error(`linghun_memory_append: 记忆超过上限（${max} 字节），先执行 linghun_memory_consolidate 沉淀`);
     }
     await ensureParent(file);
     await appendFile(file, block, "utf8");
@@ -704,9 +714,9 @@ function apply(ctx, config) {
   };
 
   ctx.tools.register(defineTool({
-    name: "memory_append",
+    name: "linghun_memory_append",
     description:
-      "把一条带时间戳的**结构化认知条目**记进海马体暖态工位（warm.md），不是写叙述摘要。\n\n类别（kind）三型：\n- event（事件=记忆本体）：`主语 | 动作 | 宾语 | 关联实体 | 细节`——记录发生了什么；时间由条目自带。\n- fact（事实=知识本体）：`实体 | 属性 | 值 | 来源#`——记录是什么/多少，值必须精确（数字/日期/版本），来源指对话批次/事件。\n- rule（规则=规则本体）：一句可执行纪律（决策/偏好/经验），不要用结构行。\n\n一条目一事实，不要一次性倾倒。积累多了用 memory_consolidate 沉淀（按类别移出到本体档案：event→记忆本体时间线、fact 高置信→知识本体、rule→规则本体）。\n\n置信度（confidence）：high=用户直接说/已验证；medium=推断（默认）；low=存疑/猜测/过期待验。低置信条目注入时带【低置信·需验证】标记，引用时必须声明不确定。\n\n更新（update）：发现旧条目已被推翻/变更时，传 memory_read 返回的编号（如 [3]）或该条目内容片段——旧条目标记为 wrong（被翻转，不再注入），新内容另起一条（默认高置信）。近似重复内容会自动合并不追加。",
+      "把一条带时间戳的**结构化认知条目**记进海马体暖态工位（warm.md），不是写叙述摘要。\n\n类别（kind）三型：\n- event（事件=记忆本体）：`主语 | 动作 | 宾语 | 关联实体 | 细节`——记录发生了什么；时间由条目自带。\n- fact（事实=知识本体）：`实体 | 属性 | 值 | 来源#`——记录是什么/多少，值必须精确（数字/日期/版本），来源指对话批次/事件。\n- rule（规则=规则本体）：一句可执行纪律（决策/偏好/经验），不要用结构行。\n\n一条目一事实，不要一次性倾倒。积累多了用 linghun_memory_consolidate 沉淀（按类别移出到本体档案：event→记忆本体时间线、fact 高置信→知识本体、rule→规则本体）。\n\n置信度（confidence）：high=用户直接说/已验证；medium=推断（默认）；low=存疑/猜测/过期待验。低置信条目注入时带【低置信·需验证】标记，引用时必须声明不确定。\n\n更新（update）：发现旧条目已被推翻/变更时，传 linghun_memory_read 返回的编号（如 [3]）或该条目内容片段——旧条目标记为 wrong（被翻转，不再注入），新内容另起一条（默认高置信）。近似重复内容会自动合并不追加。",
     parameters: {
       kind: {
         type: "string",
@@ -721,7 +731,7 @@ function apply(ctx, config) {
       },
       update: {
         type: "string",
-        description: "可选。要翻转/覆盖的旧条目：传 memory_read 返回的编号（如 [3]）或内容片段。命中后旧条目标记为 wrong（被翻转），新内容另起一条（默认高置信）。用于旧事实被推翻、决策变更、偏好改变等场景",
+        description: "可选。要翻转/覆盖的旧条目：传 linghun_memory_read 返回的编号（如 [3]）或内容片段。命中后旧条目标记为 wrong（被翻转），新内容另起一条（默认高置信）。用于旧事实被推翻、决策变更、偏好改变等场景",
       },
     },
     output: {
@@ -749,7 +759,7 @@ function apply(ctx, config) {
     isConcurrencySafe: () => false,
     async execute(args, exec) {
       const content = String(args.content ?? "").trim();
-      if (!content) throw new Error("memory_append: `content` 不能为空");
+      if (!content) throw new Error("linghun_memory_append: `content` 不能为空");
       const kind = String(args.kind ?? "fact").trim() || "fact";
       const confidence = String(args.confidence ?? "").trim();
       const update = String(args.update ?? "").trim() || undefined;
@@ -759,9 +769,9 @@ function apply(ctx, config) {
   }));
 
   ctx.tools.register(defineTool({
-    name: "memory_read",
+    name: "linghun_memory_read",
     description:
-      "读取海马体记忆。kind 可选：event→只读记忆本体档案（事件时间线）、fact→只读知识本体档案（精确值）、rule→只读规则本体（纪律）、不传→冷储摘要（cold.md）+ 暖态近期（warm.md）+ 归档索引。需要细节时可读完整内容。读≠用：读到的条目只有实际派上用场，才用 memory_touch 标记（标记=活跃，吃灰管理）。",
+      "读取海马体记忆。kind 可选：event→只读记忆本体档案（事件时间线）、fact→只读知识本体档案（精确值）、rule→只读规则本体（纪律）、不传→冷储摘要（cold.md）+ 暖态近期（warm.md）+ 归档索引。需要细节时可读完整内容。读≠用：读到的条目只有实际派上用场，才用 linghun_memory_touch 标记（标记=活跃，吃灰管理）。",
     parameters: {
       kind: {
         type: "string",
@@ -851,7 +861,7 @@ function apply(ctx, config) {
   }));
 
   ctx.tools.register(defineTool({
-    name: "journal_read",
+    name: "linghun_memory_journal_read",
     description:
       "读取序时账（journal）：原始对话流水，按发生时间（精确到秒）归档、全量不筛选。不传 date 返回所有天的索引（日期 + 条数）；传 date（YYYY-MM-DD）返回该天完整流水。传 start/end（YYYY-MM-DD HH:MM:SS，精确到秒）可**按任务时间范围精确检索**：只返回该时间窗口内的流水条目，避免翻整日全量（单日流水过大时框架会截断中间段，务必用时间范围收窄）。start/end 可跨天，二者至少传一个即可。用于追溯'当时到底说了什么'——序时账与暖态/冷储互补：warm 是遗忘梯度的近期摘要，journal 是完整原始记录。",
     parameters: {
@@ -935,9 +945,9 @@ function apply(ctx, config) {
   }));
 
   ctx.tools.register(defineTool({
-    name: "memory_touch",
+    name: "linghun_memory_touch",
     description:
-      "标记暖态记忆为「刚刚被用到」：传入该条记忆内容中的一段文字（ref），匹配到的条目 last_access 刷新为当前时间。读≠用——memory_read 读到的条目，只有实际派上用场的才 touch，这是吃灰管理的关键动作：一直不被用到的记忆会沉底、被挤出注入。",
+      "标记暖态记忆为「刚刚被用到」：传入该条记忆内容中的一段文字（ref），匹配到的条目 last_access 刷新为当前时间。读≠用——linghun_memory_read 读到的条目，只有实际派上用场的才 touch，这是吃灰管理的关键动作：一直不被用到的记忆会沉底、被挤出注入。",
     parameters: {
       ref: {
         type: "string",
@@ -960,7 +970,7 @@ function apply(ctx, config) {
     isConcurrencySafe: () => false,
     async execute(args, exec) {
       const ref = String(args?.ref ?? "").trim();
-      if (!ref) throw new Error("memory_touch: `ref` 不能为空");
+      if (!ref) throw new Error("linghun_memory_touch: `ref` 不能为空");
       if (cfg().memory?.timeWeight === false) return { touched: 0 };
       try {
         const touched = await touchWarmAccess(ref);
@@ -973,7 +983,7 @@ function apply(ctx, config) {
   }));
 
   ctx.tools.register(defineTool({
-    name: "memory_consolidate",
+    name: "linghun_memory_consolidate",
     description:
       "海马体沉淀：把暖态工位（warm.md）的近期记忆归档进 episodic/<日期>.md，并合并进冷储摘要（cold.md），然后清空暖态。相当于「判断→被判定→反馈→机制化」循环里的归档动作。",
     parameters: {},
@@ -997,7 +1007,7 @@ function apply(ctx, config) {
   }));
 
   ctx.tools.register(defineTool({
-    name: "memory_project",
+    name: "linghun_memory_project",
     description:
       "记忆本体投影（BEAM 验证机制）：把暖态工位（warm.md）按主题桶 LLM 聚合成本体投影（ontology.md）——同主题条目合并为主题节点，保留时间锚点/数字/版本/结论。供记忆提取子智能体（linghun-assembler）检索时「本体主题索引优先 + BM25 兜底」，替代纯 BM25 的分散命中。适合在 warm 条目多、问题常跨主题时执行；本体文件可在多次投影间累积（每次用当前暖态重投影）。",
     parameters: {
@@ -1032,9 +1042,9 @@ function apply(ctx, config) {
   }));
 
   ctx.tools.register(defineTool({
-    name: "memory_rules",
+    name: "linghun_memory_rules",
     description:
-      "规则本体沉淀（BEAM 三本体方案·规则本体）：把一条可复用的总结经验追加进规则本体 rules.md（## 主题 节点下追加 - 规则行），供记忆提取子智能体（linghun-assembler）检索时 R_ALIAS 规则别名命中注入。规则是长期稳定的经验（如「矛盾不硬裁」「先查证再下结论」「记忆注入是素材不替代判定」），不是一次性事实——适合在实践得出可复用结论后调用；同主题规则自动聚合在同一节点下。",
+      "规则本体沉淀（BEAM 三本体方案·规则本体）：把一条可复用的总结经验追加进规则本体 rules.md（## 主题 节点下追加 - 规则行），供记忆提取子智能体（linghun-assembler）检索时 R_ALIAS 规则别名命中注入。规则是长期稳定的经验（如「矛盾不硬裁」「先查证再下结论」「记忆注入是素材不替代判定」），不是一次性事实——适合在实践得出可复用结论后调用；同主题规则自动聚合在同一节点下。\n\n签名分桶（v0.1.0）：topic 传签名格式 `[题型域|子题型|工具|错误码] 中文名`（如 `[推理题|矛盾辨析|无|无] 矛盾处置`）时，写入 `### 桶` 签名桶块——把「题型的抽象关系结构」工程化为签名桶，同签名自动聚合；普通主题维持旧节点格式，两者可共存。",
     parameters: {
       rule: {
         type: "string",
@@ -1042,7 +1052,7 @@ function apply(ctx, config) {
       },
       topic: {
         type: "string",
-        description: "规则主题（如「判断纪律」「记忆纪律」「评测纪律」）；同主题规则聚合在一个节点下",
+        description: "规则主题（如「判断纪律」「记忆纪律」「评测纪律」）或签名桶（`[题型域|子题型|工具|错误码] 中文名`）；同主题/同签名聚合在一个节点/桶下",
       },
     },
     output: {
@@ -1120,7 +1130,7 @@ function apply(ctx, config) {
     const warmText = (warm ?? "").trim();
     const warmClean = warmText ? renderWarmEntries(parseWarm(warmText)) : "";
     const warmPart = warmClean ? `\n\n【已有记忆】\n${warmClean.slice(0, 2000)}` : "";
-    return `【对话】\n${t}${warmPart}\n\n请判断是否有值得沉淀的条目。`;
+    return `【对话】\n${t}${warmPart}\n\n请全量沉淀对话中的事件/事实/约束（只跳过纯寒暄）。`;
   };
   const callLlmText = async (system, prompt) => {
     const a = cfg().memory?.assessment ?? {};
@@ -1156,8 +1166,10 @@ function apply(ctx, config) {
       const warm = layout.readWarm();
       const prompt = buildAssessmentPrompt(transcript, warm);
       const out = await callLlmText(ASSESS_SYSTEM, prompt);
-      const { entry, touches } = parseAssessment(out);
-      if (entry) await appendMemoryBlock(entry.content, entry.kind);
+      const { entries, touches } = parseAssessment(out);
+      for (const e of entries) {
+        await appendMemoryBlock(e.content, e.kind);
+      }
       // 自动时间管理：评估 LLM 判断本轮实际用到了哪些已有记忆 → 自动 touch（读≠用，用到才活跃）
       if (c.memory?.timeWeight !== false && touches.length) {
         for (const ref of touches) {
@@ -1188,7 +1200,7 @@ function apply(ctx, config) {
 
   // ── 灵魂：读 / 更新自己的灵魂卡（自进化）────────────────────────────────
   ctx.tools.register(defineTool({
-    name: "soul_read",
+    name: "linghun_soul_read",
     description:
       "读取自己的灵魂卡（身份锚点 + 判断纪律）。当你需要回顾「我是谁、我的边界、我的纪律」时使用。",
     parameters: {},
@@ -1223,7 +1235,7 @@ function apply(ctx, config) {
   }));
 
   ctx.tools.register(defineTool({
-    name: "soul_update",
+    name: "linghun_soul_update",
     description:
       "更新自己的灵魂卡：把观察到的稳定特质、价值观、偏好折叠进身份内容（写入人设文件 $DSH_HOME/linghun/identity.md，用户可直接编辑该文件）。这是自我改进的动作——注意保留核心身份骨架，只补充/修订细节。",
     parameters: {
@@ -1244,10 +1256,10 @@ function apply(ctx, config) {
     isConcurrencySafe: () => false,
     async execute(args, exec) {
       const content = String(args.content ?? "").trim();
-      if (!content) throw new Error("soul_update: `content` 不能为空");
+      if (!content) throw new Error("linghun_soul_update: `content` 不能为空");
       const max = cfg().identity?.maxBytes ?? 64 * 1024;
       if (byteLen(content) > max) {
-        throw new Error(`soul_update: 内容超过上限（${max} 字节）`);
+        throw new Error(`linghun_soul_update: 内容超过上限（${max} 字节）`);
       }
       const file = identityFile();
       await ensureParent(file);

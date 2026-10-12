@@ -4,9 +4,9 @@
  * 暖态工位 + 冷储归档 + 序时账（journal），机制先行：
  *
  *   $DSH_HOME/linghun/memory/
- *   ├── warm.md          # 暖态工位：近期记忆（memory_append 写这里，遗忘梯度）
+ *   ├── warm.md          # 暖态工位：近期记忆（linghun_memory_append 写这里，遗忘梯度）
  *   ├── cold.md          # 冷储摘要：沉淀后的知识/规则（注入时优先读）
- *   ├── episodic/        # 冷储归档：YYYY-MM-DD.md（memory_consolidate 时移入）
+ *   ├── episodic/        # 冷储归档：YYYY-MM-DD.md（linghun_memory_consolidate 时移入）
  *   └── journal/         # 序时账：YYYY-MM-DD.md 原始流水（每次对话全量 append，不筛选）
  */
 import { appendFileSync, mkdirSync, readdirSync } from "node:fs";
@@ -63,7 +63,7 @@ const CONF_WEIGHT = { high: 2, medium: 1, low: 0, wrong: -1 };
 /** 渲染条目为纯内容（剥掉 last_access 元数据），按原顺序 join。
  *  opts.markLow !== false：低置信条目加【低置信·需验证】前缀（提醒模型声明存疑）。
  *  opts.includeWrong !== true：wrong（被翻转）条目默认跳过——注入绝不引用已废弃事实。
- *  opts.numbered：每条加 [n] 编号前缀（基于原始索引，供 memory_append update 引用）。
+ *  opts.numbered：每条加 [n] 编号前缀（基于原始索引，供 linghun_memory_append update 引用）。
  *  opts.kinds：数组过滤（只渲染指定 kind，如 ["fact"]）；不传渲染全部。 */
 export function renderWarmEntries(entries, opts = {}) {
   return entries
@@ -127,7 +127,84 @@ export function normalizeText(text) {
     .toLowerCase();
 }
 
-/** 按 ref 定位 warm 条目：支持 `[n]` 编号（memory_read 展示顺序，1-based）或内容片段。
+/**
+ * v0.1.0：MMR 排重（BEAM 情境树 v2.6 机制回灌）。
+ * token 口径对齐 v2.6：英数 token（[A-Za-z0-9][A-Za-z0-9_'-]*，去英文停用词）；
+ * 扩展中文连续串（[\u4e00-\u9fff]+），保证中英内容都能算相似度。
+ */
+const STOPWORDS = new Set(
+  ("a an and are as at be but by for if in into is it no not of on or such that the their then there these this to was will with i you your we our he she they them me my mine yours ours the a an of to in for on with about").split(" "),
+);
+const TOKEN_SIM_RE = /[a-z0-9][a-z0-9_'\-]*|[\u4e00-\u9fff]+/g;
+
+/** 相似度用 token 化：小写英数 token（去停用词）+ 中文连续串按字符 bigram 切分。
+ *  中文整串粒度太粗（3-4 块），jaccard 会被稀释到相似句不相似；bigram 让中英都能敏感算相似。 */
+export function tokenizeForSim(text) {
+  const out = [];
+  for (const m of String(text ?? "").toLowerCase().matchAll(TOKEN_SIM_RE)) {
+    const t = m[0];
+    if (/^[a-z0-9]/.test(t)) {
+      if (STOPWORDS.has(t)) continue;
+      out.push(t);
+    } else if (t.length >= 2) {
+      for (let i = 0; i + 2 <= t.length; i++) out.push(t.slice(i, i + 2));
+    } else {
+      out.push(t);
+    }
+  }
+  return out;
+}
+
+/** token 集合 Jaccard 相似度（v2.6 mmr 的 jaccard 移植）。 */
+export function jaccardSim(a, b) {
+  const sa = new Set(a ?? []);
+  const sb = new Set(b ?? []);
+  if (!sa.size || !sb.size) return 0.0;
+  let inter = 0;
+  for (const t of sa) if (sb.has(t)) inter += 1;
+  const union = sa.size + sb.size - inter;
+  return union ? inter / union : 0.0;
+}
+
+/**
+ * 贪心 MMR：相对阈值截断 → 种子取最高分 → 逐条 λ·rel − (1−λ)·max_sim 选最大边际。
+ * scored: [[rel, idx, toks], ...]，rel 归一化到池顶；返回保留下来的 idx 数组。
+ * 保底：全低于阈值也取最高分（防情境恢复空手）。λ=0.85 相关优先、阈值 0.2 保守。
+ */
+export function mmrSelect(scored, k, lam = 0.85, topCutoff = 0.2) {
+  const items = Array.isArray(scored) ? scored : [];
+  if (!items.length) return [];
+  const top = Math.max(...items.map((s) => s[0])) || 1.0;
+  let pool = items
+    .map(([rel, idx, toks]) => [rel / top, idx, toks])
+    .filter(([rel]) => rel >= topCutoff);
+  if (!pool.length) {
+    const [rel, idx, toks] = items[0];
+    pool = [[rel / top, idx, toks]];
+  }
+  const selected = [];
+  const popMax = () => {
+    let bi = 0;
+    for (let i = 1; i < pool.length; i++) if (pool[i][0] > pool[bi][0]) bi = i;
+    return pool.splice(bi, 1)[0];
+  };
+  selected.push(popMax());
+  while (selected.length < k && pool.length) {
+    const margin = (x) => {
+      const rel = x[0];
+      let ms = 0.0;
+      for (const s of selected) ms = Math.max(ms, jaccardSim(x[2], s[2]));
+      return lam * rel - (1 - lam) * ms;
+    };
+    let bi = 0;
+    for (let i = 1; i < pool.length; i++) if (margin(pool[i]) > margin(pool[bi])) bi = i;
+    if (margin(pool[bi]) <= 0.0) break;
+    selected.push(pool.splice(bi, 1)[0]);
+  }
+  return selected.map((s) => s[1]);
+}
+
+/** 按 ref 定位 warm 条目：支持 `[n]` 编号（linghun_memory_read 展示顺序，1-based）或内容片段。
  *  匹配双方先剥 markdown 标记。返回 { index, entry } 或 null。 */
 export function findWarmEntryRef(warm, ref) {
   const entries = parseWarm(warm);
@@ -356,7 +433,7 @@ export function createMemoryLayout(root, readText) {
     /** 注入用渲染：三本体档案（知识/规则/记忆）+ 冷储摘要 + 归档/序时账索引，截断到 maxChars。
      *  写侧协议 v1：本体档案（结构化可查视图）优先注入——知识本体（精确值）→ 规则本体（纪律）→
      *  事件时间线（时序）→ 冷储摘要（高抽象经验）；暖态近期记忆（warm）默认不进注入段
-     *  （近期记忆由 memory_read 按需读取），仅当 opts.injectWarm === true 时追加。
+     *  （近期记忆由 linghun_memory_read 按需读取），仅当 opts.injectWarm === true 时追加。
      *  opts.timeWeight !== false 时，暖态按 sortWarmForInject 排序：
      *  high（验证过的知识）不衰减、保持写入序常驻；medium/low 按 last_access 衰减（吃灰沉底）；
      *  超限从尾部裁剪——低置信/吃灰的记忆自然被挤出注入，high 知识永不因久未使用被挤出。
@@ -377,12 +454,34 @@ export function createMemoryLayout(root, readText) {
       // 记忆本体（事件时间线，回答"什么时候/顺序"）
       const ontM = readFile(memoryOntologyFile());
       if (ontM.trim()) parts.push(`## 事件时间线 / Timeline\n${ontM.trim()}`);
-      // 近期记忆默认不进注入段（高频高抽象优先；近期由 memory_read 按需读）
+      // 近期记忆默认不进注入段（高频高抽象优先；近期由 linghun_memory_read 按需读）
       if (opts.injectWarm === true && warmRaw.trim()) {
         let warm = warmRaw;
         if (opts.timeWeight !== false) {
           const entries = sortWarmForInject(parseWarm(warmRaw));
-          warm = renderWarmEntries(entries);
+          // v0.1.0：MMR 排重（BEAM v2.6 机制回灌）——排序后候选按「位置新鲜度」打分，
+          // 贪心 λ·rel − (1−λ)·max_sim 去重（token Jaccard），同类冗余条目被砍，保留多样性。
+          // 置信度不参与打分：低置信条目按注入纪律须带【低置信·需验证】标记注入，不得被 MMR 挤掉；
+          // 排重只针对「同类冗余」（相似度惩罚）；wrong 沉底后新鲜度自然低于阈值被过滤。
+          const mmr = opts.mmr && typeof opts.mmr === "object" ? opts.mmr : {};
+          if (mmr.enabled !== false) {
+            const k = Number(mmr.k ?? 6) || 6;
+            const n = entries.length;
+            const relOf = (e, i) => {
+              // 新鲜度：位置越靠前越新；high（验证过）不参与时间衰减，恒 1.0
+              return e.confidence === "high" ? 1.0 : 1 - 0.6 * (n > 1 ? i / (n - 1) : 0);
+            };
+            const scored = entries.map((e, i) => [relOf(e, i), i, tokenizeForSim(e.block)]);
+            const idxs = mmrSelect(
+              scored,
+              k,
+              Number(mmr.lambda ?? 0.85) || 0.85,
+              Number(mmr.topCutoff ?? 0.2) || 0.2,
+            );
+            warm = renderWarmEntries(idxs.map((i) => entries[i]));
+          } else {
+            warm = renderWarmEntries(entries);
+          }
         }
         const lowExists = /【低置信·需验证】/.test(warm);
         const note = lowExists
@@ -417,7 +516,7 @@ export function createMemoryLayout(root, readText) {
         used += head.length + 2;
         if (head.length < part.length) break;
       }
-      return `${kept.join("\n\n")}\n\n> 记忆超出注入上限，可用 memory_read 读取全文。`;
+      return `${kept.join("\n\n")}\n\n> 记忆超出注入上限，可用 linghun_memory_read 读取全文。`;
     },
   };
 }
