@@ -34,13 +34,18 @@
 - `memory_consolidate`：沉淀——event→记忆本体时间线、fact 高置信→知识本体、rule→规则本体
 - 序时账（journal）每次对话全量留痕、情景归档（episodic）冷储
 
-**目标系统（goal.js，v0.1.1 新增）**
+**目标系统（goal.js，v0.1.1 新增 → v0.1.5 增强）**
 - 目标 = 记忆的骨架：事件/状态/信念挂在目标上；认知循环「实践→认识→再实践」的未来维度（不只提炼过去的因果，还提炼想创造的未来）
-- 写侧 `linghun_goal_update`：目标信号合并（new/progress/change/achieve/abandon），同 speaker 同主题自动合并不重复建档，不预判未来会被问什么
-- 读侧 `linghun_goal_get`：残差触发 `触发分 = α·sim + β·goalActivate`——纯相似度是 goal/value 类联想的盲区（MADELEINE 实证漏检 33–43%），目标激活分补上；achieved/abandoned 不再触发
+- 写侧 `linghun_goal_update`：目标信号合并（new/progress/change/achieve/abandon），同 speaker 同主题自动合并不重复建档；v0.1.5 起价值观/底线陈述（I believe in… / I refused to…）也收录（belief 域）；high/medium 目标附 1-2 条 Bridge 触发词（triggers：什么处境会激活它）——写时轻量结构化、**不穷举**
+- 读侧 `linghun_goal_get`：残差触发 `触发分 = α·sim + β·goalActivate`——纯相似度是 goal/value 类联想的盲区（MADELEINE 实证漏检 33–43%），目标激活分补上；v0.1.5 激活分 = `stateW × (0.25·domainHit + 0.35·bridgeHit + 0.40·sim + 0.15)`，Bridge 命中（触发词与处境共现 ≥2 token）补上语义远距联想；achieved/abandoned 不再触发
 - `linghun_goal_state`：状态机查询（active/paused/achieved/abandoned）
-- 两条纪律：不做「匹配判断」做「目标激活」；只改读侧、写侧零成本（不退回写侧穷举）
+- 两条纪律：不做「匹配判断」做「目标激活」；写侧只加 1-2 条结构化触发词、**绝不写侧穷举**（对比 T-Mem/HyperMem 千次写时调用，成本低两个数量级）
 - 注入：目标主线（active 目标按 priority）随记忆段渲染，配合目标激活纪律提示
+
+**评测（LoCoMo-Plus，16 题 × 独立 home，官方 Memory Awareness Judge）**
+- **v0.1.4 14/16（87.5%）→ v0.1.5 16/16（100% 满分）**：题 12（college fund 语义远距）、题 13（拒绝谣言价值观）双双转正，零回归
+- 机制验证：题 12 college fund 目标靠 Bridge 触发词从排 18/24 → #5（score 0.150）；题 13「尊重隐私、不散播谣言」belief 目标建档后排 #1（score 0.581）
+- 结论：真正的杠杆在目标档案结构化 + 读侧重匹配，不在写侧枚举预算——写侧只需每条目标 1-2 条触发词
 
 **本体投影（BEAM 验证机制回灌）**
 - `memory_project`：warm 按主题桶 LLM 聚合 → ontology.md 主题节点，组装侧「本体主题索引优先 + BM25 兜底」

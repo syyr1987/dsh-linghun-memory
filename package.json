@@ -1,6 +1,6 @@
 {
   "name": "dsh-linghun-memory",
-  "version": "0.1.3",
+  "version": "0.1.5",
   "description": "灵魂（Linghun）记忆体方案——收口者灵魂卡 + 记忆完全本体化一整套（独立于原 dsh-linghun 的两条线）：写侧结构化三型条目（event 记忆本体 / fact 知识本体 / rule 规则本体）+ 读侧 warm 按 kind 分组原生渲染三本体；序时账留痕、情景归档、低置信降权遗忘；memory_append / memory_read / memory_consolidate 读写沉淀闭环。不是人设卡，是判断力——给 DeepSeek Harness 装上收口器。",
   "type": "module",
   "main": "index.js",
