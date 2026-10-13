@@ -34,6 +34,14 @@
 - `memory_consolidate`：沉淀——event→记忆本体时间线、fact 高置信→知识本体、rule→规则本体
 - 序时账（journal）每次对话全量留痕、情景归档（episodic）冷储
 
+**目标系统（goal.js，v0.1.1 新增）**
+- 目标 = 记忆的骨架：事件/状态/信念挂在目标上；认知循环「实践→认识→再实践」的未来维度（不只提炼过去的因果，还提炼想创造的未来）
+- 写侧 `linghun_goal_update`：目标信号合并（new/progress/change/achieve/abandon），同 speaker 同主题自动合并不重复建档，不预判未来会被问什么
+- 读侧 `linghun_goal_get`：残差触发 `触发分 = α·sim + β·goalActivate`——纯相似度是 goal/value 类联想的盲区（MADELEINE 实证漏检 33–43%），目标激活分补上；achieved/abandoned 不再触发
+- `linghun_goal_state`：状态机查询（active/paused/achieved/abandoned）
+- 两条纪律：不做「匹配判断」做「目标激活」；只改读侧、写侧零成本（不退回写侧穷举）
+- 注入：目标主线（active 目标按 priority）随记忆段渲染，配合目标激活纪律提示
+
 **本体投影（BEAM 验证机制回灌）**
 - `memory_project`：warm 按主题桶 LLM 聚合 → ontology.md 主题节点，组装侧「本体主题索引优先 + BM25 兜底」
 
@@ -52,6 +60,10 @@
 ```bash
 dsh plugin --profile web add dsh-linghun-memory
 ```
+
+## 致谢
+
+感谢 **Zhiyun Shi** 对本项目的支持与帮助。
 
 ## 许可
 

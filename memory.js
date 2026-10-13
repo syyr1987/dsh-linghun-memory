@@ -204,6 +204,61 @@ export function mmrSelect(scored, k, lam = 0.85, topCutoff = 0.2) {
   return selected.map((s) => s[1]);
 }
 
+/* ── BM25 可考检索（v0.1.2 落地：LoCoMo-Plus 实验验证的统计路线最优解）──
+ *  Jaccard+MMR 只认词面共现；BM25 用词频×文档稀有度打分，cue 换词面时比 Jaccard 更抗稀释。
+ *  落地原则：新增原语，不改现有默认路径（renderForInject 新鲜度+MMR 照旧）；
+ *  query 驱动的可考检索场景（如评测/召回）可显式调用 bm25Retrieve。 */
+const K1 = 1.5;
+const B = 0.75;
+
+/** 基于语料构建 BM25 统计（df/avgdl）。docToksList: token 数组数组。 */
+export function buildBm25Stats(docToksList) {
+  const docFreq = new Map();
+  let sum = 0;
+  for (const toks of docToksList) {
+    sum += toks.length;
+    for (const w of new Set(toks)) docFreq.set(w, (docFreq.get(w) || 0) + 1);
+  }
+  const n = docToksList.length;
+  return { totalDocs: n, docFreq, avgdl: n ? sum / n : 1 };
+}
+
+/** BM25 打分：K1=1.5, B=0.75；idf 用 Robertson-Sparck Jones 经典变体
+ *  idf(w)=log(1+(N-df(w)+0.5)/(df(w)+0.5))（无负 idf），与 LoCoMo-Plus 验证实现 retrieve_bm25.mjs 完全一致。
+ *  stats 不传时退化为词频打分（idf=1），仅用于对比。 */
+export function bm25Score(qToks, docToks, stats) {
+  const dl = docToks.length || 1;
+  const tf = new Map();
+  for (const w of docToks) tf.set(w, (tf.get(w) || 0) + 1);
+  const N = stats?.totalDocs ?? 1;
+  const avgdl = stats?.avgdl ?? 1;
+  const df = stats?.docFreq;
+  let s = 0;
+  for (const w of new Set(qToks)) {
+    const f = tf.get(w) || 0;
+    if (!f) continue;
+    const d = df?.get(w) || 0;
+    const idf = df ? Math.log(1 + (N - d + 0.5) / (d + 0.5)) : 1;
+    s += idf * ((f * (K1 + 1)) / (f + K1 * (1 - B + (B * dl) / avgdl)));
+  }
+  return s;
+}
+
+/** BM25 检索：候选条目 → BM25 分数（rel，过滤 0 分）→ 贪心 MMR 排重（λ 默认 0.85，相对阈值 0.2）。
+ *  与 LoCoMo-Plus 验证实现 retrieve_bm25.mjs 完全一致；返回 [{ idx, score }]，按选入顺序。 */
+export function bm25Retrieve(entries, query, stats, opts = {}) {
+  const k = Number(opts.topk ?? 10) || 10;
+  const qToks = tokenizeForSim(query);
+  const docText = (e) => e.block ?? e.text ?? "";
+  const scores = entries.map((e) => bm25Score(qToks, tokenizeForSim(docText(e)), stats));
+  const scored = entries
+    .map((e, i) => [scores[i], i, tokenizeForSim(docText(e))])
+    .filter(([rel]) => rel > 0);
+  const lam = Number(opts.lambda ?? 0.85) || 0.85;
+  const idxs = mmrSelect(scored, k, lam, 0.2);
+  return idxs.map((i) => ({ idx: i, score: scores[i] }));
+}
+
 /** 按 ref 定位 warm 条目：支持 `[n]` 编号（linghun_memory_read 展示顺序，1-based）或内容片段。
  *  匹配双方先剥 markdown 标记。返回 { index, entry } 或 null。 */
 export function findWarmEntryRef(warm, ref) {

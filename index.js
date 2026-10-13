@@ -19,9 +19,10 @@ import { dirname, join } from "node:path";
 import z from "@deepseek-ai/schemastery";
 import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
 import { defineTool } from "@deepseek-ai/dsh-tools";
-import { DEFAULT_IDENTITY, DEFAULT_JUDGMENT, DEFAULT_USER_CARD, MEMORY_DISCIPLINE, resolveIdentity } from "./identity.js";
+import { DEFAULT_IDENTITY, DEFAULT_JUDGMENT, DEFAULT_USER_CARD, MEMORY_DISCIPLINE, COGNITION_CYCLE, resolveIdentity } from "./identity.js";
 import { createMemoryLayout, parseWarm, renderWarmEntries, summarizeWarmForCold, touchWarmAccessText, findWarmEntryRef, replaceWarmEntryText, markWrongWarmEntryText, findNearDuplicateWarm } from "./memory.js";
 import { writeOntologySafe, appendRulesSafe } from "./ontology.js";
+import { parseGoals, serializeGoals, sortGoals, mergeGoalSignal, rankGoalsByTrigger, renderGoalsForInject, GOAL_DISCIPLINE } from "./goal.js";
 
 const name = "linghun";
 const inject = ["systemPrompt", "tools"];
@@ -144,6 +145,24 @@ const Config = z.object({
       topCutoff: z.number().default(0.2),
     }).default({}),
   }),
+  goals: z.object({
+    /** 目标系统总开关：false 则目标工具停用（get/update/state 返回 disabled）。 */
+    enabled: z.boolean().default(true),
+    /** 是否把目标主线注入读侧：true=读侧注入段追加「目标激活纪律+按触发分排序的目标主线」。 */
+    inject: z.boolean().default(true),
+    /** 目标档案路径：默认 $DSH_HOME/linghun/goals/goals.json。 */
+    path: z.string().default(""),
+    /** 注入预算上限（字符）：目标主线注入段不超过此值。 */
+    injectMaxChars: z.number().default(1200),
+    /** 段落顺序：默认排在记忆段之后。 */
+    order: z.number().default(0.6),
+    /** 残差触发公式权重：触发分 = simWeight·sim + activateWeight·goalActivate。 */
+    simWeight: z.number().default(1),
+    /** 目标激活权重：v1 建议 0.3 起步（MADELEINE 借鉴，β 从 0.3 起步）。 */
+    activateWeight: z.number().default(0.3),
+    /** 目标主线注入条数上限。 */
+    maxGoals: z.number().default(5),
+  }).default({}),
 });
 
 /** 记忆本体投影系统提示（BEAM build_ontology 机制回灌）：把暖态按主题桶聚合成主题节点。
@@ -248,6 +267,17 @@ function apply(ctx, config) {
   const memoryDir = () => join(resolveDshHome(), MEMORY_DIR);
   const identityFile = () => join(resolveDshHome(), IDENTITY_FILE);
   const layout = createMemoryLayout(memoryDir, readCached);
+
+  // ── 目标系统（goal.js）：目标档案 CRUD + 读侧残差触发 ────────────────
+  const goalsFile = () =>
+    (cfg().goals?.path ?? "").trim() || join(resolveDshHome(), "linghun", "goals", "goals.json");
+  const readGoals = () => parseGoals(readCached(goalsFile()));
+  const writeGoals = async (goals) => {
+    const file = goalsFile();
+    await ensureParent(file);
+    await writeFile(file, serializeGoals(goals), "utf8");
+    fileCache.delete(file);
+  };
 
   // 团队认知台账（assembler 认知循环团队共享；缺失/损坏跳过，只读）。
   // 子智能体的领域工作区 = $DSH_HOME/linghun/memory/team/，主智能体经此共享认知产物。
@@ -366,8 +396,24 @@ function apply(ctx, config) {
       injectWarm: c.memory?.injectWarm,
       mmr: c.memory?.mmr,
     });
-    if (!rendered) return "";
-    return `${MEMORY_DISCIPLINE}\n\n${rendered}`;
+    // 目标系统：读侧注入目标主线（GOAL_DISCIPLINE + 按触发分排序的目标清单）
+    const goalsCfg = c.goals;
+    let goalSection = "";
+    if (goalsCfg?.enabled !== false && goalsCfg?.inject !== false) {
+      try {
+        const gs = readGoals();
+        if (gs.length) {
+          goalSection = `${GOAL_DISCIPLINE}\n\n${renderGoalsForInject(gs, "", { maxGoals: goalsCfg?.maxGoals ?? 5 })}`;
+        }
+      } catch {
+        /* 目标档案不可读则跳过目标主线 */
+      }
+    }
+    const parts = [];
+    if (rendered) parts.push(rendered);
+    if (goalSection) parts.push(goalSection);
+    if (!parts.length) return "";
+    return `${MEMORY_DISCIPLINE}\n\n${COGNITION_CYCLE}\n\n${parts.join("\n\n")}`;
   };
 
   const sectionDisposers = { identity: null, judgment: null, memory: null };
@@ -1074,6 +1120,214 @@ function apply(ctx, config) {
     isConcurrencySafe: () => false,
     async execute(args, exec) {
       return doRulesAppend({ rule: args?.rule, topic: args?.topic });
+    },
+  }));
+
+  // ── 目标系统：get（残差触发检索）/ update（写侧信号合并）/ state（状态查询）────
+  ctx.tools.register(defineTool({
+    name: "linghun_goal_get",
+    description:
+      "目标主线处境触发检索：把当前处境（对话消息/情景）与目标档案做残差触发打分（触发分 = 相似度 + 目标激活分），返回按触发分降序的目标清单。目标=记忆的骨架（要达成什么+为什么）；goal/value 类联想是纯相似度的盲区——本工具用「目标激活」补上。命中目标主线时把它作为最高优先参考（温和注入，可用参考，不强制改写回答）。",
+    parameters: {
+      query: {
+        type: "string",
+        required: true,
+        description: "当前处境文本（用户消息/情景描述），用于触发目标激活",
+      },
+      top: { type: "number", description: "返回目标条数上限，默认 5" },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          goals: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                id: { type: "string" },
+                speaker: { type: "string" },
+                statement: { type: "string" },
+                domain: { type: "string" },
+                state: { type: "string" },
+                priority: { type: "string" },
+                time: { type: "string" },
+                detail: { type: "string" },
+                linked: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+          scores: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                id: { type: "string" },
+                sim: { type: "number" },
+                activate: { type: "number" },
+                score: { type: "number" },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [
+        {
+          type: "text",
+          text: value.ok
+            ? `目标主线触发检索（触发分降序）：\n${(value.goals ?? []).map((g, i) => `[${i + 1}] ${g.domain ? `(${g.domain}) ` : ""}${g.statement}｜${g.state}｜触发分 ${((value.scores?.[i]?.score) ?? 0).toFixed(2)}`).join("\n") || "（无命中目标）"}`
+            : "目标检索失败。",
+        },
+      ],
+    },
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      const query = String(args?.query ?? "").trim();
+      if (!query) throw new Error("linghun_goal_get: `query` 不能为空");
+      const c = cfg();
+      if (c.goals?.enabled === false) return { ok: false, goals: [], scores: [] };
+      const ranked = rankGoalsByTrigger(readGoals(), query, {
+        simWeight: c.goals?.simWeight ?? 1,
+        activateWeight: c.goals?.activateWeight ?? 0.3,
+      });
+      const top = Number(args?.top ?? 5);
+      const kept = ranked.slice(0, top);
+      return {
+        ok: true,
+        goals: kept.map((r) => r.goal),
+        scores: kept.map((r) => ({ id: r.goal.id, sim: r.sim, activate: r.activate, score: r.score })),
+      };
+    },
+  }));
+
+  ctx.tools.register(defineTool({
+    name: "linghun_goal_update",
+    description:
+      "写侧目标信号合并：把对话中出现的目标信号（新目标/推进/调整/达成/放弃）合并进目标档案（$DSH_HOME/linghun/goals/goals.json）。目标系统=真实前瞻记忆：写时不预判未来会被问什么，只沉淀「这个人要达成什么」。同 speaker 同主题（domain 相同或表述相似）自动合并、不重复建档。action：new（新目标）/ progress（推进，追加 detail）/ change（调整 statement/domain/priority）/ achieve（达成）/ abandon（放弃）。",
+    parameters: {
+      action: {
+        type: "string",
+        enum: ["new", "progress", "change", "achieve", "abandon"],
+        description: "目标信号动作：new=新目标 / progress=推进 / change=调整 / achieve=达成 / abandon=放弃，默认 new",
+      },
+      statement: {
+        type: "string",
+        required: true,
+        description: "目标表述（可检索的具体文本，如「攒钱买戒指向 Sarah 求婚」，不要抽象词）",
+      },
+      speaker: { type: "string", description: "目标属于谁，默认 self" },
+      domain: { type: "string", description: "主题域标签（money/family/career/health/travel/belief 等）——检索轴" },
+      priority: { type: "string", enum: ["high", "medium", "low"], description: "优先级，默认 medium" },
+      detail: { type: "string", description: "进度/事件细节（推进时追加，达成时写达成说明）" },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          mode: { type: "string" },
+          goal: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              id: { type: "string" },
+              speaker: { type: "string" },
+              statement: { type: "string" },
+              domain: { type: "string" },
+              state: { type: "string" },
+              priority: { type: "string" },
+              time: { type: "string" },
+              detail: { type: "string" },
+              linked: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [
+        {
+          type: "text",
+          text: value.ok
+            ? `目标档案已更新（${value.mode}）：${value.goal?.statement ?? ""}｜${value.goal?.state ?? ""}`
+            : `目标更新未执行：${value.mode ?? "disabled"}。`,
+        },
+      ],
+    },
+    isConcurrencySafe: () => false,
+    async execute(args) {
+      const c = cfg();
+      if (c.goals?.enabled === false) return { ok: false, mode: "disabled", goal: null };
+      const signal = {
+        action: args?.action ?? "new",
+        statement: args?.statement,
+        speaker: args?.speaker,
+        domain: args?.domain,
+        priority: args?.priority,
+        detail: args?.detail,
+      };
+      const { goals, mode, goal } = mergeGoalSignal(readGoals(), signal, todayName());
+      await writeGoals(goals);
+      return { ok: true, mode, goal };
+    },
+  }));
+
+  ctx.tools.register(defineTool({
+    name: "linghun_goal_state",
+    description:
+      "目标档案状态查询：返回当前全部目标及状态机统计（active/paused/achieved/abandoned 数量）。用于回顾目标主线、核对状态机是否随对话更新。",
+    parameters: {},
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          total: { type: "number" },
+          byState: {
+            type: "object",
+            additionalProperties: true,
+          },
+          goals: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                id: { type: "string" },
+                speaker: { type: "string" },
+                statement: { type: "string" },
+                domain: { type: "string" },
+                state: { type: "string" },
+                priority: { type: "string" },
+                time: { type: "string" },
+                detail: { type: "string" },
+                linked: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => [
+        {
+          type: "text",
+          text: value.ok
+            ? `目标状态机：共 ${value.total} 个目标（active ${value.byState?.active ?? 0} / paused ${value.byState?.paused ?? 0} / achieved ${value.byState?.achieved ?? 0} / abandoned ${value.byState?.abandoned ?? 0}）`
+            : "目标状态查询未执行（disabled）。",
+        },
+      ],
+    },
+    isConcurrencySafe: () => true,
+    async execute() {
+      const c = cfg();
+      if (c.goals?.enabled === false) return { ok: false, total: 0, byState: {}, goals: [] };
+      const goals = sortGoals(readGoals());
+      const byState = {};
+      for (const g of goals) byState[g.state ?? "unknown"] = (byState[g.state ?? "unknown"] ?? 0) + 1;
+      return { ok: true, total: goals.length, byState, goals };
     },
   }));
 
