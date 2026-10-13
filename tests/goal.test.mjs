@@ -153,6 +153,76 @@ test("goal: 有处境渲染按触发分排序", () => {
   assert.ok(text.indexOf("攒钱买戒指") < text.indexOf("发论文"));
 });
 
+// ── Bridge 触发词（v0.1.5）─────────────────────────────────────────────
+test("goal: new 建档可携带 triggers（Bridge 触发词）", () => {
+  const { goals, mode, goal } = mergeGoalSignal([], {
+    action: "new",
+    speaker: "Caroline",
+    statement: "keep saving for the kid's college fund",
+    domain: "money",
+    priority: "high",
+    triggers: ["reconsidering long-term financial plans after a family trip", "postponing the saving approach and rethinking priorities"],
+  }, "2026-10-13");
+  assert.equal(mode, "new");
+  assert.equal(goal.triggers.length, 2);
+  assert.equal(goals[0].triggers[0].includes("family trip"), true);
+});
+
+test("goal: triggers 去重且最多 2 条", () => {
+  const { goals } = mergeGoalSignal([], {
+    action: "new",
+    statement: "A 目标",
+    domain: "family",
+    triggers: ["t1 same", "t1 same", "t2 same", "t3 same", "t4 same"],
+  }, "2026-10-13");
+  assert.equal(goals[0].triggers.length, 2);
+  assert.deepEqual(goals[0].triggers, ["t1 same", "t2 same"]);
+});
+
+test("goal: merge 时补充 triggers 不覆盖已有", () => {
+  const first = mergeGoalSignal([], { action: "new", statement: "A 目标", domain: "family", triggers: ["t1"] }, "2026-10-13").goals;
+  const { goals, mode } = mergeGoalSignal(first, { action: "new", statement: "A 目标", domain: "family", triggers: ["t2"] }, "2026-10-14");
+  assert.equal(mode, "merge");
+  assert.deepEqual(goals[0].triggers, ["t1", "t2"]);
+});
+
+test("goal: Bridge 命中抬升远距处境的激活分（词面零线索）", () => {
+  const goal = {
+    statement: "keep saving for the kid's college fund",
+    domain: "money",
+    state: "active",
+    triggers: ["reconsidering long-term financial plans after a family trip"],
+  };
+  const far = "Six months later, we postponed that approach and took a family trip, which made me rethink how we use our time";
+  const near = goalActivateScore(goal, far);
+  const base = { statement: "keep saving for the kid's college fund", domain: "money", state: "active" };
+  const farNoBridge = goalActivateScore(base, far);
+  assert.ok(near > farNoBridge, `bridge=${near} noBridge=${farNoBridge}`);
+});
+
+test("goal: 题12 场景——college fund 目标在远距 trigger 下进前 5", () => {
+  const goals = [
+    { id: "g1", statement: "keep saving for the kid's college fund", domain: "money", state: "active", priority: "high", triggers: ["reconsidering long-term financial plans after a family trip"] },
+    { id: "g2", statement: "adopt a child to become a mother", domain: "family", state: "active", priority: "high", time: "2026-10-01" },
+    { id: "g3", statement: "become a licensed counselor by studying psychology", domain: "career", state: "active", priority: "high", time: "2026-10-02" },
+    { id: "g4", statement: "spend more quality time with family", domain: "family", state: "active", priority: "medium", time: "2026-10-03" },
+  ];
+  const q = "Six months later, we postponed that approach and took a family trip, which made me rethink how we use our time";
+  const ranked = rankGoalsByTrigger(goals, q);
+  const idx = ranked.findIndex((r) => r.goal.id === "g1");
+  assert.ok(idx >= 0 && idx < 5, `college fund 排名 ${idx}（前 5 应有）`);
+});
+
+test("goal: belief 词表覆盖谣言/隐私/声誉场景（题13）", () => {
+  const q = "I refused to spread a rumor about a colleague out of respect for everyone's privacy and reputation";
+  const goal = { statement: "never spread rumors; respect everyone's privacy and reputation", domain: "belief", state: "active" };
+  const hit = goalActivateScore(goal, q);
+  const missGoal = { statement: "learn to play the piano", domain: "art", state: "active" };
+  const miss = goalActivateScore(missGoal, q);
+  assert.ok(hit > miss, `hit=${hit} miss=${miss}`);
+  assert.ok(hit > 0.3, `belief 激活分应明显 >0（当前 ${hit}）`);
+});
+
 // ── 注入纪律 ────────────────────────────────────────────────────────────
 test("goal: GOAL_DISCIPLINE 含激活纪律要点", () => {
   assert.ok(GOAL_DISCIPLINE.includes("目标激活"));

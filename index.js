@@ -1157,6 +1157,7 @@ function apply(ctx, config) {
                 time: { type: "string" },
                 detail: { type: "string" },
                 linked: { type: "array", items: { type: "string" } },
+                triggers: { type: "array", items: { type: "string" } },
               },
             },
           },
@@ -1207,7 +1208,7 @@ function apply(ctx, config) {
   ctx.tools.register(defineTool({
     name: "linghun_goal_update",
     description:
-      "写侧目标信号合并：把对话中出现的目标信号（新目标/推进/调整/达成/放弃）合并进目标档案（$DSH_HOME/linghun/goals/goals.json）。目标系统=真实前瞻记忆：写时不预判未来会被问什么，只沉淀「这个人要达成什么」。同 speaker 同主题（domain 相同或表述相似）自动合并、不重复建档。action：new（新目标）/ progress（推进，追加 detail）/ change（调整 statement/domain/priority）/ achieve（达成）/ abandon（放弃）。",
+      "写侧目标信号合并：把对话中出现的目标信号（新目标/推进/调整/达成/放弃）合并进目标档案（$DSH_HOME/linghun/goals/goals.json）。目标系统=真实前瞻记忆：写时不预判未来会被问什么，只沉淀「这个人要达成什么」。同 speaker 同主题（domain 相同或表述相似）自动合并、不重复建档。action：new（新目标）/ progress（推进，追加 detail）/ change（调整 statement/domain/priority）/ achieve（达成）/ abandon（放弃）。triggers 为可选 Bridge 触发词（1-2 条「什么处境会激活这个目标」的语义远距桥，英文原文，如 college fund 目标 → \"reconsidering long-term financial plans after a family trip\"），只给 high/medium 目标、每条 3-8 词、不穷举未来提问。",
     parameters: {
       action: {
         type: "string",
@@ -1217,12 +1218,17 @@ function apply(ctx, config) {
       statement: {
         type: "string",
         required: true,
-        description: "目标表述（可检索的具体文本，如「攒钱买戒指向 Sarah 求婚」，不要抽象词）",
+        description: "目标表述（可检索的具体文本，如「攒钱买戒指向 Sarah 求婚」，不要抽象词；英文对话用英文原文）",
       },
       speaker: { type: "string", description: "目标属于谁，默认 self" },
       domain: { type: "string", description: "主题域标签（money/family/career/health/travel/belief 等）——检索轴" },
       priority: { type: "string", enum: ["high", "medium", "low"], description: "优先级，默认 medium" },
       detail: { type: "string", description: "进度/事件细节（推进时追加，达成时写达成说明）" },
+      triggers: {
+        type: "array",
+        items: { type: "string" },
+        description: "可选 Bridge 触发词（1-2 条「什么处境会激活它」的语义远距桥，英文原文，仅 high/medium 目标）",
+      },
     },
     output: {
       schema: {
@@ -1244,6 +1250,7 @@ function apply(ctx, config) {
               time: { type: "string" },
               detail: { type: "string" },
               linked: { type: "array", items: { type: "string" } },
+              triggers: { type: "array", items: { type: "string" } },
             },
           },
         },
@@ -1268,6 +1275,7 @@ function apply(ctx, config) {
         domain: args?.domain,
         priority: args?.priority,
         detail: args?.detail,
+        triggers: args?.triggers,
       };
       const { goals, mode, goal } = mergeGoalSignal(readGoals(), signal, todayName());
       await writeGoals(goals);
@@ -1306,6 +1314,7 @@ function apply(ctx, config) {
                 time: { type: "string" },
                 detail: { type: "string" },
                 linked: { type: "array", items: { type: "string" } },
+                triggers: { type: "array", items: { type: "string" } },
               },
             },
           },
