@@ -50,6 +50,12 @@
 **本体投影（BEAM 验证机制回灌）**
 - `memory_project`：warm 按主题桶 LLM 聚合 → ontology.md 主题节点，组装侧「本体主题索引优先 + BM25 兜底」
 
+**记忆地图（检索图方案，v0.1.7 新增）**
+- 写侧只建图、读侧按图回溯：把沉淀产物组织成四轴导航注入读侧——情境轴（暖态主题索引 + `[n]` 编号指针）/ 目标轴（目标速览 domain·state·priority）/ 档案轴（本体节点索引：知识/规则/时间线/冷储）/ 证据层（序时账 + 情景归档索引）
+- 地图是索引密度（导航不倾倒，默认 2000 字预算），细节由认知主体用 `memory_read`（`[n]` 编号/本体直读）或 `memory_journal`（时间窗口）下钻；能解决就停
+- 编号对齐 `memory_read` 原始 `parseWarm` 索引；`map.enabled=false` 可关
+- 来源验证：白板按图回溯评测（LoCoMo-Plus 401 题全量，deepseek-chat + 地图注入）83.04%，首次超过 v015 候选注入（80.05%）——「读侧放权给图让模型自走 > 读侧代劳替模型选候选」；goal 型 +13pp 是目标轴红利，value 型 −9pp 暴露难桥（行为↔价值观）需写侧补 triggers
+
 ## 与 dsh-linghun 的关系
 
 | | dsh-linghun（原灵魂线） | dsh-linghun-memory（记忆体线） |

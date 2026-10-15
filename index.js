@@ -23,6 +23,7 @@ import { DEFAULT_IDENTITY, DEFAULT_JUDGMENT, DEFAULT_USER_CARD, MEMORY_DISCIPLIN
 import { createMemoryLayout, parseWarm, renderWarmEntries, summarizeWarmForCold, touchWarmAccessText, findWarmEntryRef, replaceWarmEntryText, markWrongWarmEntryText, findNearDuplicateWarm } from "./memory.js";
 import { writeOntologySafe, appendRulesSafe } from "./ontology.js";
 import { parseGoals, serializeGoals, sortGoals, mergeGoalSignal, rankGoalsByTrigger, renderGoalsForInject, GOAL_DISCIPLINE } from "./goal.js";
+import { renderMemoryMap, MAP_DISCIPLINE } from "./map.js";
 
 const name = "linghun";
 const inject = ["systemPrompt", "tools"];
@@ -143,6 +144,15 @@ const Config = z.object({
       lambda: z.number().default(0.85),
       /** 相对阈值截断：低于池顶 score×topCutoff 的候选不参与（防低相关混入）。 */
       topCutoff: z.number().default(0.2),
+    }).default({}),
+    /** 记忆地图（检索图方案，v018 按图回溯回灌 DSH）：写侧机制渲染成四轴导航图注入读侧，
+     *  认知主体按图回溯——看图定位（情境/目标/档案轴）→ 沿轴翻 → memory_read/journal 下钻证据。
+     *  地图是索引密度（导航不倾倒），细节走已有下钻工具；默认开启，与本体素材注入互补。 */
+    map: z.object({
+      /** 记忆地图开关：false 则不注入地图段与按图回溯纪律。 */
+      enabled: z.boolean().default(true),
+      /** 地图注入预算上限（字符）：导航索引不需要大预算，默认 2000。 */
+      injectMaxChars: z.number().default(2000),
     }).default({}),
   }),
   goals: z.object({
@@ -399,21 +409,52 @@ function apply(ctx, config) {
     // 目标系统：读侧注入目标主线（GOAL_DISCIPLINE + 按触发分排序的目标清单）
     const goalsCfg = c.goals;
     let goalSection = "";
+    let goals = [];
     if (goalsCfg?.enabled !== false && goalsCfg?.inject !== false) {
       try {
-        const gs = readGoals();
-        if (gs.length) {
-          goalSection = `${GOAL_DISCIPLINE}\n\n${renderGoalsForInject(gs, "", { maxGoals: goalsCfg?.maxGoals ?? 5 })}`;
+        goals = readGoals();
+        if (goals.length) {
+          goalSection = `${GOAL_DISCIPLINE}\n\n${renderGoalsForInject(goals, "", { maxGoals: goalsCfg?.maxGoals ?? 5 })}`;
         }
       } catch {
         /* 目标档案不可读则跳过目标主线 */
       }
     }
+    // 记忆地图（检索图方案）：写侧机制导航图（四轴+证据层），读侧按图回溯
+    const mapCfg = c.memory?.map;
+    let mapSection = "";
+    if (mapCfg?.enabled !== false) {
+      try {
+        const rulesPath =
+          (c.memory?.rules?.path ?? "").trim() ||
+          join(resolveDshHome(), "linghun", "memory", "rules.md");
+        mapSection = renderMemoryMap(
+          {
+            warmEntries: parseWarm(layout.readWarm()),
+            coldSummary: layout.readCold(),
+            knowledgeOnt: layout.readKnowledgeOntology(),
+            memoryOnt: layout.readMemoryOntology(),
+            rules: readCached(rulesPath),
+            journals: layout.listJournal(),
+            episodes: layout.listEpisodic(),
+            goals,
+          },
+          { maxChars: mapCfg?.injectMaxChars ?? 2000 },
+        );
+      } catch (err) {
+        /* 地图渲染失败则跳过地图段（不影响本体素材注入） */
+        if (process.env.LINGHUN_MAP_DEBUG === "1") console.error("[map] renderMemoryMap failed:", err);
+      }
+    }
     const parts = [];
+    if (mapSection) parts.push(mapSection);
     if (rendered) parts.push(rendered);
     if (goalSection) parts.push(goalSection);
     if (!parts.length) return "";
-    return `${MEMORY_DISCIPLINE}\n\n${COGNITION_CYCLE}\n\n${parts.join("\n\n")}`;
+    const discipline = mapSection
+      ? `${MAP_DISCIPLINE}\n\n${MEMORY_DISCIPLINE}\n\n${COGNITION_CYCLE}`
+      : `${MEMORY_DISCIPLINE}\n\n${COGNITION_CYCLE}`;
+    return `${discipline}\n\n${parts.join("\n\n")}`;
   };
 
   const sectionDisposers = { identity: null, judgment: null, memory: null };

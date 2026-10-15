@@ -1,7 +1,7 @@
 {
   "name": "dsh-linghun-memory",
-  "version": "0.1.6",
-  "description": "灵魂（Linghun）记忆体方案——收口者灵魂卡 + 记忆完全本体化 + 目标系统（goal.js）一整套（独立于原 dsh-linghun 的两条线）：写侧结构化三型条目（event 记忆本体 / fact 知识本体 / rule 规则本体）+ 目标信号合并与 Bridge 触发词（belief 价值观/底线收录）；读侧 warm 按 kind 分组原生渲染三本体 + 目标激活分（0.25·domainHit + 0.35·bridgeHit + 0.40·sim）补上 goal/value 语义远距联想；序时账留痕、情景归档、低置信降权遗忘；memory_append / memory_read / memory_consolidate + linghun_goal_update / linghun_goal_get / linghun_goal_state 读写沉淀闭环。LoCoMo-Plus 16/16 满分（官方 Memory Awareness Judge）。不是人设卡，是判断力——给 DeepSeek Harness 装上收口器。",
+  "version": "0.1.7",
+  "description": "灵魂（Linghun）记忆体方案——收口者灵魂卡 + 记忆完全本体化 + 目标系统（goal.js）一整套（独立于原 dsh-linghun 的两条线）：写侧结构化三型条目（event 记忆本体 / fact 知识本体 / rule 规则本体）+ 目标信号合并与 Bridge 触发词（belief 价值观/底线收录）；读侧 warm 按 kind 分组原生渲染三本体 + 目标激活分（0.25·domainHit + 0.35·bridgeHit + 0.40·sim）补上 goal/value 语义远距联想；v0.1.7 检索图方案——写侧机制渲染成四轴记忆地图（情境/目标/档案轴+证据层）注入读侧，认知主体按图回溯、memory_read/journal 下钻证据；序时账留痕、情景归档、低置信降权遗忘；memory_append / memory_read / memory_consolidate + linghun_goal_update / linghun_goal_get / linghun_goal_state 读写沉淀闭环。LoCoMo-Plus 16/16 满分（官方 Memory Awareness Judge）。不是人设卡，是判断力——给 DeepSeek Harness 装上收口器。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -28,7 +28,8 @@
     "memory.js",
     "cordis.patch.yml",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "map.js"
   ],
   "homepage": "https://github.com/syyr1987/dsh-linghun-memory",
   "keywords": [
