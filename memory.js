@@ -46,11 +46,12 @@ export function parseWarm(text) {
     .split(/\n(?=## )/)
     .map((b) => b.trim())
     .filter(Boolean);
-  return blocks.map((block) => {
+  return blocks.map((block, idx) => {
     const m = block.match(/<!-- last_access: ([^>]+) -->/);
     const cm = block.match(/^## .*?\[[a-z_]+\]\s+(high|medium|low|wrong)\s*$/m);
     return {
       block,
+      idx, // 文件序索引（0-based）：编号引用（[n]→文件序第 n 条）与渲染顺序解耦的锚点，v0.1.8
       lastAccess: m ? m[1].trim() : null,
       confidence: cm ? cm[1] : "medium",
       kind: kindOfBlock(block),
@@ -72,7 +73,9 @@ export function renderWarmEntries(entries, opts = {}) {
     .filter(({ e }) => (Array.isArray(opts.kinds) ? opts.kinds.includes(e.kind) : true))
     .map(({ e, i }) => {
       const body = e.block.replace(/\n?<!-- last_access: [^>]+ -->/, "");
-      const num = opts.numbered ? `[${i + 1}] ` : "";
+      // 编号=文件序（parseWarm 的 idx），与渲染顺序解耦：倒序渲染时 [n] 仍指向文件序第 n 条，
+      // findWarmEntryRef 的 [n] 解析语义不变（v0.1.8）。无 idx 的裸对象退回数组序（向后兼容）。
+      const num = opts.numbered ? `[${(typeof e.idx === "number" ? e.idx : i) + 1}] ` : "";
       const tag =
         e.confidence === "wrong"
           ? "【已翻转·勿引用】 "
@@ -84,6 +87,50 @@ export function renderWarmEntries(entries, opts = {}) {
       return `${num}${tag}${body}`;
     })
     .join("\n\n");
+}
+
+/** ref 匹配：ref 按空白拆多词，任一词命中（normalizeForMatch 归一后包含匹配）即真。
+ *  双方统一小写：英文专名 ref 大小写不定（模型传 caroline/Caroline 都该命中），v0.1.8。
+ *  空词表视为不匹配（防止空 ref 全量放行误用）。 */
+export function matchRef(text, ref) {
+  const words = String(ref ?? "")
+    .split(/\s+/)
+    .map((w) => normalizeForMatch(w).trim().toLowerCase())
+    .filter(Boolean);
+  if (!words.length) return false;
+  const hay = normalizeForMatch(String(text ?? "")).toLowerCase();
+  return words.some((w) => hay.includes(w));
+}
+
+/** ref 过滤暖态条目：只保留命中 ref 的条目（多词任一命中）。
+ *  用于大暖态下的定向读取——过滤后条目数少，突破截断上限精确读取（v0.1.8）。 */
+export function filterWarmByRef(entries, ref) {
+  const list = Array.isArray(entries) ? entries : [];
+  if (!String(ref ?? "").trim()) return list;
+  return list.filter((e) => matchRef(e.block, ref));
+}
+
+/** ref 过滤文本（本体档案/规则文件/索引行）：
+ *  ## 块结构（本体档案）按块过滤保留完整块（含块头与 last_access）；
+ *  非 ## 结构（rules.md 列表）按行过滤。无 ## 块但含内容时退化为行过滤。 */
+export function filterTextByRef(raw, ref) {
+  const text = String(raw ?? "");
+  if (!text.trim() || !String(ref ?? "").trim()) return text;
+  const parts = text.split(/\n(?=## )/);
+  if (parts.length > 1) {
+    return parts.filter((b) => b.trim() && matchRef(b, ref)).join("");
+  }
+  return text
+    .split(/\r?\n/)
+    .filter((line) => line.trim() && matchRef(line, ref))
+    .join("\n");
+}
+
+/** 暖态最新优先：写入序倒序（parseWarm 保序=文件序=追加时间序，倒序=最新在前）。
+ *  大暖态被截断时砍最旧、保最新——memory_read 综合视图渲染用（v0.1.8）。
+ *  与 sortWarmByAccess 的区别：本函数不受 touch 刷新干扰，"最新写入"语义稳定。 */
+export function sortWarmNewestFirst(entries) {
+  return [...(Array.isArray(entries) ? entries : [])].reverse();
 }
 
 /** 按 last_access 降序排序（最近调用的在前）；缺失视为最旧沉底。 */

@@ -20,7 +20,7 @@ import z from "@deepseek-ai/schemastery";
 import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
 import { defineTool } from "@deepseek-ai/dsh-tools";
 import { DEFAULT_IDENTITY, DEFAULT_JUDGMENT, DEFAULT_USER_CARD, MEMORY_DISCIPLINE, COGNITION_CYCLE, resolveIdentity } from "./identity.js";
-import { createMemoryLayout, parseWarm, renderWarmEntries, summarizeWarmForCold, touchWarmAccessText, findWarmEntryRef, replaceWarmEntryText, markWrongWarmEntryText, findNearDuplicateWarm } from "./memory.js";
+import { createMemoryLayout, parseWarm, renderWarmEntries, summarizeWarmForCold, touchWarmAccessText, findWarmEntryRef, replaceWarmEntryText, markWrongWarmEntryText, findNearDuplicateWarm, sortWarmNewestFirst, filterWarmByRef, filterTextByRef, matchRef } from "./memory.js";
 import { writeOntologySafe, appendRulesSafe } from "./ontology.js";
 import { parseGoals, serializeGoals, sortGoals, mergeGoalSignal, rankGoalsByTrigger, renderGoalsForInject, GOAL_DISCIPLINE } from "./goal.js";
 import { renderMemoryMap, MAP_DISCIPLINE } from "./map.js";
@@ -865,6 +865,10 @@ function apply(ctx, config) {
         enum: ["event", "fact", "rule"],
         description: "可选。只读某个本体档案：event=记忆本体（事件时间线）/ fact=知识本体（精确值）/ rule=规则本体（纪律）；不传则读综合视图（cold+warm+索引）",
       },
+      ref: {
+        type: "string",
+        description: "可选。关键词过滤——只返回命中该关键词的条目/行（多词空格分隔=任一命中即可）。大记忆量下的定向读取：过滤后条目少、不受截断影响，优先用它精确定位（如传人名/项目名/时间词）",
+      },
       full: {
         type: "boolean",
         description: "true 返回完整内容（可能很长）；false 返回注入摘要，默认 false",
@@ -894,6 +898,16 @@ function apply(ctx, config) {
       const c = cfg();
       const max = c.memory?.injectMaxChars ?? 6000;
       const useFull = args?.full === true;
+      const ref = String(args?.ref ?? "").trim();
+      // 统一截断：提示模型最新条目已前置、可用 ref 定向过滤（v0.1.8）
+      const clip = (text) => {
+        const limit = useFull ? 50000 : max;
+        if (text.length <= limit) return { content: text, truncated: false };
+        return {
+          content: `${text.slice(0, limit)}\n…(截断：全文 ${byteLen(text)} 字节，仅显示前 ${limit} 字符。近期条目已按最新优先排列；传 ref 关键词可定向过滤读取)…`,
+          truncated: true,
+        };
+      };
       // kind 直读本体档案：查证=查节点（知识本体精确值/规则本体纪律/记忆本体事件时间线）
       if (args?.kind) {
         let raw;
@@ -910,16 +924,21 @@ function apply(ctx, config) {
           return { exists: false, bytes: 0, content: "" };
         }
         if (!raw.trim()) return { exists: false, bytes: 0, content: "" };
-        const limit = useFull ? 50000 : max;
-        const truncated = raw.length > limit;
-        return {
-          exists: true,
-          bytes: byteLen(raw),
-          content: truncated ? `${raw.slice(0, limit)}\n…(截断)…` : raw,
-        };
+        const filtered = ref ? filterTextByRef(raw, ref) : raw;
+        if (!filtered.trim()) {
+          return { exists: true, bytes: 0, content: `（本体档案中无命中「${ref}」的条目）` };
+        }
+        const out = clip(filtered);
+        return { exists: true, bytes: byteLen(filtered), content: out.content };
       }
-      const cold = layout.readCold();
-      const warm = renderWarmEntries(parseWarm(layout.readWarm()), {
+      const coldRaw = layout.readCold();
+      // ref 模式下冷储摘要同样参与过滤：cold 可达 15KB+，全量放入会把过滤结果
+      // 挤出截断窗口（0.1.8-alpha.1 实测发现的真 bug），定向读取必须全段过滤（v0.1.8）
+      const cold = ref ? filterTextByRef(coldRaw, ref) : coldRaw;
+      const warmEntries = parseWarm(layout.readWarm());
+      const kept = ref ? filterWarmByRef(warmEntries, ref) : warmEntries;
+      // 暖态最新优先：写入序倒序渲染——大暖态被截断时砍最旧、保最新，编号 [n] 仍为文件序（v0.1.8）
+      const warm = renderWarmEntries(sortWarmNewestFirst(kept), {
         numbered: true,
         includeWrong: true,
       });
@@ -928,22 +947,20 @@ function apply(ctx, config) {
       if (cold.trim()) parts.push(cold.trim());
       if (warm.trim()) parts.push(`## 近期记忆 / Recent\n\n${warm.trim()}`);
       if (episodes.length) {
-        const rows = episodes
+        let rows = episodes
           .map((e) => `- ${e.name}${e.title ? ` — ${e.title}` : ""}`)
-          .join("\n");
-        parts.push(`## 归档索引 / Archive\n${rows}`);
+          .filter((r) => !ref || matchRef(r, ref));
+        if (rows.length) parts.push(`## 归档索引 / Archive\n${rows.join("\n")}`);
       }
       const team = readTeamLedger();
       if (team) parts.push(team);
       const full = parts.join("\n\n");
-      if (!full.trim()) return { exists: false, bytes: 0, content: "" };
-      const limit = useFull ? 50000 : max;
-      const truncated = full.length > limit;
-      return {
-        exists: true,
-        bytes: byteLen(full),
-        content: truncated ? `${full.slice(0, limit)}\n…(截断)…` : full,
-      };
+      if (!full.trim()) {
+        if (ref) return { exists: true, bytes: 0, content: `（海马体中无命中「${ref}」的条目）` };
+        return { exists: false, bytes: 0, content: "" };
+      }
+      const out = clip(full);
+      return { exists: true, bytes: byteLen(full), content: out.content };
     },
   }));
 
