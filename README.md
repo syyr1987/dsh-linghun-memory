@@ -60,6 +60,13 @@
 
 - [v0.1.7 技术报告（docs/TECH_REPORT_v0.1.7.md）](docs/TECH_REPORT_v0.1.7.md)：记忆地图检索图方案全量技术文档——系统设计 / 评测结果 / 设计原则 / 版本线
 
+**ACC（Agentic Cognitive Control，v0.2.0 新增）**
+- 把记忆检索/领域加载的控制权交给模型：默认（`acc.enabled=false`）保持自动注入不变；开启后注入收窄为核心导航层（记忆地图 + ACC 纪律 + 目标主线），素材全部走工具主动获取
+- `linghun_retrieval_probe`：给候选不给结论——BM25 + ref 过滤产出 top_k 候选（默认 8，上限 20），模型挑 1-3 条 `memory_read` 精读（agentic RAG：模型决定读什么，而非系统替它选）
+- `linghun_domain_load`：领域按需加载（load/unload/status，TTL 默认 30min 自动回收）；内置五域（code/writing/analysis/planning/locomo，工作纪律+检索导航），`$DSH_HOME/linghun/domains/<name>.md` 自定义覆盖（文件优先）
+- `linghun_memory_status`：状态可见——暖冷规模、目标、已加载领域、可用工具清单，让模型先盘点再决策
+- 评测：A/B 对照（A=自动注入现行为 / B=ACC 主动模式），指标含任务成功率 + 信息决策（检索命中率/精读条数/注入 token 成本/领域加载次数），跑通后再全切注入策略
+
 ## 与 dsh-linghun 的关系
 
 | | dsh-linghun（原灵魂线） | dsh-linghun-memory（记忆体线） |
