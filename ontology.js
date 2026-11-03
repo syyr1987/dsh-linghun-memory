@@ -1,12 +1,12 @@
 /**
- * 灵魂（Linghun）— 记忆本体投影（BEAM 第二轮验证机制回灌）。
+ * 灵魂（Linghun）— 记忆投影（BEAM 第二轮验证机制回灌）。
  *
  * 背景：BEAM 1M/10M 双档实验中，把 warm 记忆按主题桶聚合成本体投影
  * （build_ontology_v1/v2），再让组装侧「本体主题索引优先 + BM25 兜底」，
- * 是隔离基线 60 → 记忆本体 70 → 双管齐下 85/90 的关键一环。
+ * 是隔离基线 60 → 记忆 70 → 双管齐下 85/90 的关键一环。
  *
  * 本模块把该机制沉淀为海马体布局的一等公民：
- *   $DSH_HOME/linghun/memory/ontology.md  # 记忆本体投影（主题节点）
+ *   $DSH_HOME/linghun/memory/ontology.md  # 记忆投影（主题节点）
  *
  * 与 linghun-assembler 联动：assembler 检索时优先读 ontology.md 主题节点
  * （TAG_ALIAS 主题命中 → 节点优先），再 BM25 兜底；无本体时退回纯 BM25。
@@ -87,7 +87,7 @@ export function writeOntologySafe(path, text) {
   }
 }
 
-/** 规则本体追加（BEAM 三本体方案·规则本体）：把一条总结经验追加进 rules.md。
+/** 规则本体追加（BEAM 两本体方案·规则本体）：把一条总结经验追加进 rules.md。
  *  格式与 ontology 同构（## 主题节点），命中同主题节点 → 追加一行；否则新建节点。
  *  规则是稳定的长期经验（矛盾不硬裁/查证纪律等），不是一次性事实。
  *  返回 { ok, changed, path, theme }；失败返回 { ok:false, reason }。

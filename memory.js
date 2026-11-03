@@ -9,424 +9,193 @@
  *   ├── episodic/        # 冷储归档：YYYY-MM-DD.md（linghun_memory_consolidate 时移入）
  *   └── journal/         # 序时账：YYYY-MM-DD.md 原始流水（每次对话全量 append，不筛选）
  */
-import { appendFileSync, mkdirSync, readdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
-export const WARM = "warm.md";
-export const COLD = "cold.md";
-export const EPISODIC_DIR = "episodic";
-export const JOURNAL_DIR = "journal";
-/** 三本体档案（warm 移出后的固化层，结构化条目追加）：
- *  记忆本体 = 事件时间线档案；知识本体 = 精确值档案。规则本体沿用 rules.md（ontology.js）。 */
-export const MEMORY_ONTOLOGY = "memory_ontology.md";
+import {
+  WARM, COLD, EPISODIC_DIR, JOURNAL_DIR, KINDS,
+  kindOfBlock, parseWarm, renderWarmEntries,
+  normalizeForMatch, normalizeText, matchRef, filterWarmByRef, filterTextByRef,
+  sortWarmNewestFirst, sortWarmByAccess, sortWarmForInject,
+  tokenizeForSim, jaccardSim, mmrSelect, buildBm25Stats, bm25Score, bm25Retrieve,
+  findWarmEntryRef, replaceWarmEntryText, markWrongWarmEntryText,
+  findNearDuplicateWarm, touchWarmAccessText,
+  summarizeWarmForCold, truncateKeepHead,
+  slugifyTheme, unitFileName, renderEpisodicUnit, parseEpisodicUnit,
+  renderWarmUnitBlock, activateWarmUnit, renderEpisodicIndex,
+} from "./vendor/hippocampus.js";
+import { parseRulesBuckets } from "./ontology.js";
+
+/* 转发导出：抽离后保持对外签名不变（抽道留术——调用方 import memory.js 的行为不变） */
+export {
+  WARM, COLD, EPISODIC_DIR, JOURNAL_DIR, KINDS,
+  kindOfBlock, parseWarm, renderWarmEntries,
+  normalizeForMatch, normalizeText, matchRef, filterWarmByRef, filterTextByRef,
+  sortWarmNewestFirst, sortWarmByAccess, sortWarmForInject,
+  tokenizeForSim, jaccardSim, mmrSelect, buildBm25Stats, bm25Score, bm25Retrieve,
+  findWarmEntryRef, replaceWarmEntryText, markWrongWarmEntryText,
+  findNearDuplicateWarm, touchWarmAccessText,
+  summarizeWarmForCold, truncateKeepHead,
+  slugifyTheme, unitFileName, renderEpisodicUnit, parseEpisodicUnit,
+  renderWarmUnitBlock, activateWarmUnit, renderEpisodicIndex,
+};
+
+/** 人物画像目录（主体轴挂载点）：$DSH_HOME/linghun/profiles/<subject>.md，六槽画像。 */
+export const PROFILES_DIR = "profiles";
+/** 画像六槽（fact/state/goal/value/causal/preference）——画像 = 记忆的第一索引键。 */
+export const PROFILE_SLOTS = ["fact", "state", "goal", "value", "causal", "preference"];
+/** 本体档案与记忆文件（warm 移出后的固化层，结构化条目追加）：
+ *  记忆 = 事件时间线文件；知识本体 = 精确值档案。规则本体沿用 rules.md（ontology.js）。 */
+export const MEMORY_TIMELINE = "memory_timeline.md";
+/** 旧文件名（记忆本体时代遗留），只读兼容：memory_timeline.md 不存在时回退读它。 */
+export const MEMORY_TIMELINE_LEGACY = "memory_ontology.md";
+/** @deprecated 旧常量名，仅为外部引用兼容保留。 */
+export const MEMORY_ONTOLOGY = MEMORY_TIMELINE;
 export const KNOWLEDGE_ONTOLOGY = "knowledge_ontology.md";
 
-/** 结构化条目三型：event（事件=记忆本体）/ fact（事实=知识本体）/ rule（规则=规则本体）。
- *  legacy 表示旧叙述条目（无 kind 标记，兼容渲染）。 */
-export const KINDS = ["event", "fact", "rule"];
-
-/** 从条目标题行提取 kind：`## <stamp> [<kind>] <confidence>`；无 kind 视为 legacy（旧叙述条目）。
- *  三型归一化贯穿解析层：旧类别（decision/preference→rule、experience→event、identity→fact）在此收敛。 */
-export function kindOfBlock(block) {
-  const m = String(block ?? "").match(/^## .*?\[([a-z_]+)\]/m);
-  const k = m ? m[1].toLowerCase() : "legacy";
-  if (KINDS.includes(k)) return k;
-  if (k === "decision" || k === "preference") return "rule";
-  if (k === "experience") return "event";
-  if (k === "identity") return "fact";
-  return "legacy";
-}
-
-/** 解析 warm.md 为条目数组；每条提取 last_access、confidence 与 kind。
- *  标题行格式：`## <stamp> [<kind>] <confidence>`；confidence 缺省视为 medium（老条目兼容）；
- *  kind 缺省视为 legacy（旧叙述条目，兼容渲染）。
- *  confidence：high / medium / low / wrong（wrong=被翻转的事实，已废弃，注入时排除）。 */
-export function parseWarm(text) {
-  const blocks = String(text ?? "")
-    .split(/\n(?=## )/)
-    .map((b) => b.trim())
-    .filter(Boolean);
-  return blocks.map((block, idx) => {
-    const m = block.match(/<!-- last_access: ([^>]+) -->/);
-    const cm = block.match(/^## .*?\[[a-z_]+\]\s+(high|medium|low|wrong)\s*$/m);
-    return {
-      block,
-      idx, // 文件序索引（0-based）：编号引用（[n]→文件序第 n 条）与渲染顺序解耦的锚点，v0.1.8
-      lastAccess: m ? m[1].trim() : null,
-      confidence: cm ? cm[1] : "medium",
-      kind: kindOfBlock(block),
-    };
-  });
-}
-
-const CONF_WEIGHT = { high: 2, medium: 1, low: 0, wrong: -1 };
-
-/** 渲染条目为纯内容（剥掉 last_access 元数据），按原顺序 join。
- *  opts.markLow !== false：低置信条目加【低置信·需验证】前缀（提醒模型声明存疑）。
- *  opts.includeWrong !== true：wrong（被翻转）条目默认跳过——注入绝不引用已废弃事实。
- *  opts.numbered：每条加 [n] 编号前缀（基于原始索引，供 linghun_memory_append update 引用）。
- *  opts.kinds：数组过滤（只渲染指定 kind，如 ["fact"]）；不传渲染全部。 */
-export function renderWarmEntries(entries, opts = {}) {
-  return entries
-    .map((e, i) => ({ e, i }))
-    .filter(({ e }) => opts.includeWrong === true || e.confidence !== "wrong")
-    .filter(({ e }) => (Array.isArray(opts.kinds) ? opts.kinds.includes(e.kind) : true))
-    .map(({ e, i }) => {
-      const body = e.block.replace(/\n?<!-- last_access: [^>]+ -->/, "");
-      // 编号=文件序（parseWarm 的 idx），与渲染顺序解耦：倒序渲染时 [n] 仍指向文件序第 n 条，
-      // findWarmEntryRef 的 [n] 解析语义不变（v0.1.8）。无 idx 的裸对象退回数组序（向后兼容）。
-      const num = opts.numbered ? `[${(typeof e.idx === "number" ? e.idx : i) + 1}] ` : "";
-      const tag =
-        e.confidence === "wrong"
-          ? "【已翻转·勿引用】 "
-          : opts.markLow === false
-            ? ""
-            : e.confidence === "low"
-              ? "【低置信·需验证】 "
-              : "";
-      return `${num}${tag}${body}`;
-    })
-    .join("\n\n");
-}
-
-/** ref 匹配：ref 按空白拆多词，任一词命中（normalizeForMatch 归一后包含匹配）即真。
- *  双方统一小写：英文专名 ref 大小写不定（模型传 caroline/Caroline 都该命中），v0.1.8。
- *  空词表视为不匹配（防止空 ref 全量放行误用）。 */
-export function matchRef(text, ref) {
-  const words = String(ref ?? "")
-    .split(/\s+/)
-    .map((w) => normalizeForMatch(w).trim().toLowerCase())
-    .filter(Boolean);
-  if (!words.length) return false;
-  const hay = normalizeForMatch(String(text ?? "")).toLowerCase();
-  return words.some((w) => hay.includes(w));
-}
-
-/** ref 过滤暖态条目：只保留命中 ref 的条目（多词任一命中）。
- *  用于大暖态下的定向读取——过滤后条目数少，突破截断上限精确读取（v0.1.8）。 */
-export function filterWarmByRef(entries, ref) {
-  const list = Array.isArray(entries) ? entries : [];
-  if (!String(ref ?? "").trim()) return list;
-  return list.filter((e) => matchRef(e.block, ref));
-}
-
-/** ref 过滤文本（本体档案/规则文件/索引行）：
- *  ## 块结构（本体档案）按块过滤保留完整块（含块头与 last_access）；
- *  非 ## 结构（rules.md 列表）按行过滤。无 ## 块但含内容时退化为行过滤。 */
-export function filterTextByRef(raw, ref) {
-  const text = String(raw ?? "");
-  if (!text.trim() || !String(ref ?? "").trim()) return text;
-  const parts = text.split(/\n(?=## )/);
-  if (parts.length > 1) {
-    return parts.filter((b) => b.trim() && matchRef(b, ref)).join("");
-  }
-  return text
-    .split(/\r?\n/)
-    .filter((line) => line.trim() && matchRef(line, ref))
-    .join("\n");
-}
-
-/** 暖态最新优先：写入序倒序（parseWarm 保序=文件序=追加时间序，倒序=最新在前）。
- *  大暖态被截断时砍最旧、保最新——memory_read 综合视图渲染用（v0.1.8）。
- *  与 sortWarmByAccess 的区别：本函数不受 touch 刷新干扰，"最新写入"语义稳定。 */
-export function sortWarmNewestFirst(entries) {
-  return [...(Array.isArray(entries) ? entries : [])].reverse();
-}
-
-/** 按 last_access 降序排序（最近调用的在前）；缺失视为最旧沉底。 */
-export function sortWarmByAccess(entries) {
-  return [...entries].sort((a, b) => {
-    const ta = a.lastAccess ?? "";
-    const tb = b.lastAccess ?? "";
-    return tb.localeCompare(ta, "en");
-  });
-}
-
-/** 注入排序：先按置信度（高>中>低>wrong）。
- *  high（验证过的知识）不参与时间衰减——保持写入顺序，时间管不着（几个月没用也不沉底）；
- *  medium/low 按 last_access 衰减（新在前），吃灰沉底被挤出注入——遗忘梯度只管未验证/存疑的情景。
- *  wrong 沉底且渲染时排除。 */
-export function sortWarmForInject(entries) {
-  return [...entries].sort((a, b) => {
-    const wa = CONF_WEIGHT[a.confidence ?? "medium"] ?? 1;
-    const wb = CONF_WEIGHT[b.confidence ?? "medium"] ?? 1;
-    if (wa !== wb) return wb - wa;
-    if ((a.confidence === "high" && b.confidence === "high")) return 0; // 稳定排序=保持写入序
-    const ta = a.lastAccess ?? "";
-    const tb = b.lastAccess ?? "";
-    return tb.localeCompare(ta, "en");
-  });
-}
-
-/** 匹配前剥掉 markdown 格式标记（**、*、`），避免模型选的 ref 跨标记匹配失败。 */
-export function normalizeForMatch(text) {
-  return text.replace(/[*`]+/g, "");
-}
-
-/** 归一化文本用于查重：剥标题行/访问时间/markdown 标记/空白，统一小写。 */
-export function normalizeText(text) {
-  return String(text ?? "")
-    .replace(/^## .*$/gm, "")
-    .replace(/<!-- last_access: [^>]+ -->/g, "")
-    .replace(/[*`]+/g, "")
-    .replace(/\s+/g, "")
-    .trim()
-    .toLowerCase();
-}
-
-/**
- * v0.1.0：MMR 排重（BEAM 情境树 v2.6 机制回灌）。
- * token 口径对齐 v2.6：英数 token（[A-Za-z0-9][A-Za-z0-9_'-]*，去英文停用词）；
- * 扩展中文连续串（[\u4e00-\u9fff]+），保证中英内容都能算相似度。
- */
-const STOPWORDS = new Set(
-  ("a an and are as at be but by for if in into is it no not of on or such that the their then there these this to was will with i you your we our he she they them me my mine yours ours the a an of to in for on with about").split(" "),
-);
-const TOKEN_SIM_RE = /[a-z0-9][a-z0-9_'\-]*|[\u4e00-\u9fff]+/g;
-
-/** 相似度用 token 化：小写英数 token（去停用词）+ 中文连续串按字符 bigram 切分。
- *  中文整串粒度太粗（3-4 块），jaccard 会被稀释到相似句不相似；bigram 让中英都能敏感算相似。 */
-export function tokenizeForSim(text) {
-  const out = [];
-  for (const m of String(text ?? "").toLowerCase().matchAll(TOKEN_SIM_RE)) {
-    const t = m[0];
-    if (/^[a-z0-9]/.test(t)) {
-      if (STOPWORDS.has(t)) continue;
-      out.push(t);
-    } else if (t.length >= 2) {
-      for (let i = 0; i + 2 <= t.length; i++) out.push(t.slice(i, i + 2));
-    } else {
-      out.push(t);
+/** 解析画像文件（$DSH_HOME/linghun/profiles/<subject>.md）。
+ *  格式：`# 画像：<subject>（<备注>）` → 摘要行 `> 摘要：…` → 六槽分组 `## <slot>`，槽内 `- 条目`。
+ *  返回 { subject, summary, slots: { [slot]: [{ text, confidence }] } }；未识别槽并入 "other"。
+ *  解析失败/空文件返回 null（调用方据此跳过画像段）。 */
+export function parseProfiles(text) {
+  const raw = String(text ?? "");
+  if (!raw.trim()) return null;
+  const subjectMatch = raw.match(/^#\s*画像[:：]\s*([^\s（(]+)/m);
+  if (!subjectMatch) return null;
+  const subject = subjectMatch[1].trim();
+  const summaryMatch = raw.match(/^>\s*摘要[:：]\s*(.+)$/m);
+  const slots = {};
+  let current = null;
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const slotMatch = trimmed.match(/^##\s*([a-z_]+)\s*$/);
+    if (slotMatch) {
+      current = slotMatch[1];
+      if (!slots[current]) slots[current] = [];
+      continue;
+    }
+    if (trimmed.startsWith("#") || trimmed.startsWith(">")) continue;
+    if (current && /^-/.test(trimmed)) {
+      const body = trimmed.replace(/^-+\s*/, "").trim();
+      if (body) slots[current].push({ text: body, confidence: null });
     }
   }
-  return out;
+  return { subject, summary: summaryMatch ? summaryMatch[1].trim() : "", slots };
 }
 
-/** token 集合 Jaccard 相似度（v2.6 mmr 的 jaccard 移植）。 */
-export function jaccardSim(a, b) {
-  const sa = new Set(a ?? []);
-  const sb = new Set(b ?? []);
-  if (!sa.size || !sb.size) return 0.0;
-  let inter = 0;
-  for (const t of sa) if (sb.has(t)) inter += 1;
-  const union = sa.size + sb.size - inter;
-  return union ? inter / union : 0.0;
-}
-
-/**
- * 贪心 MMR：相对阈值截断 → 种子取最高分 → 逐条 λ·rel − (1−λ)·max_sim 选最大边际。
- * scored: [[rel, idx, toks], ...]，rel 归一化到池顶；返回保留下来的 idx 数组。
- * 保底：全低于阈值也取最高分（防情境恢复空手）。λ=0.85 相关优先、阈值 0.2 保守。
- */
-export function mmrSelect(scored, k, lam = 0.85, topCutoff = 0.2) {
-  const items = Array.isArray(scored) ? scored : [];
-  if (!items.length) return [];
-  const top = Math.max(...items.map((s) => s[0])) || 1.0;
-  let pool = items
-    .map(([rel, idx, toks]) => [rel / top, idx, toks])
-    .filter(([rel]) => rel >= topCutoff);
-  if (!pool.length) {
-    const [rel, idx, toks] = items[0];
-    pool = [[rel / top, idx, toks]];
-  }
-  const selected = [];
-  const popMax = () => {
-    let bi = 0;
-    for (let i = 1; i < pool.length; i++) if (pool[i][0] > pool[bi][0]) bi = i;
-    return pool.splice(bi, 1)[0];
-  };
-  selected.push(popMax());
-  while (selected.length < k && pool.length) {
-    const margin = (x) => {
-      const rel = x[0];
-      let ms = 0.0;
-      for (const s of selected) ms = Math.max(ms, jaccardSim(x[2], s[2]));
-      return lam * rel - (1 - lam) * ms;
-    };
-    let bi = 0;
-    for (let i = 1; i < pool.length; i++) if (margin(pool[i]) > margin(pool[bi])) bi = i;
-    if (margin(pool[bi]) <= 0.0) break;
-    selected.push(pool.splice(bi, 1)[0]);
-  }
-  return selected.map((s) => s[1]);
-}
-
-/* ── BM25 可考检索（v0.1.2 落地：LoCoMo-Plus 实验验证的统计路线最优解）──
- *  Jaccard+MMR 只认词面共现；BM25 用词频×文档稀有度打分，cue 换词面时比 Jaccard 更抗稀释。
- *  落地原则：新增原语，不改现有默认路径（renderForInject 新鲜度+MMR 照旧）；
- *  query 驱动的可考检索场景（如评测/召回）可显式调用 bm25Retrieve。 */
-const K1 = 1.5;
-const B = 0.75;
-
-/** 基于语料构建 BM25 统计（df/avgdl）。docToksList: token 数组数组。 */
-export function buildBm25Stats(docToksList) {
-  const docFreq = new Map();
-  let sum = 0;
-  for (const toks of docToksList) {
-    sum += toks.length;
-    for (const w of new Set(toks)) docFreq.set(w, (docFreq.get(w) || 0) + 1);
-  }
-  const n = docToksList.length;
-  return { totalDocs: n, docFreq, avgdl: n ? sum / n : 1 };
-}
-
-/** BM25 打分：K1=1.5, B=0.75；idf 用 Robertson-Sparck Jones 经典变体
- *  idf(w)=log(1+(N-df(w)+0.5)/(df(w)+0.5))（无负 idf），与 LoCoMo-Plus 验证实现 retrieve_bm25.mjs 完全一致。
- *  stats 不传时退化为词频打分（idf=1），仅用于对比。 */
-export function bm25Score(qToks, docToks, stats) {
-  const dl = docToks.length || 1;
-  const tf = new Map();
-  for (const w of docToks) tf.set(w, (tf.get(w) || 0) + 1);
-  const N = stats?.totalDocs ?? 1;
-  const avgdl = stats?.avgdl ?? 1;
-  const df = stats?.docFreq;
-  let s = 0;
-  for (const w of new Set(qToks)) {
-    const f = tf.get(w) || 0;
-    if (!f) continue;
-    const d = df?.get(w) || 0;
-    const idf = df ? Math.log(1 + (N - d + 0.5) / (d + 0.5)) : 1;
-    s += idf * ((f * (K1 + 1)) / (f + K1 * (1 - B + (B * dl) / avgdl)));
-  }
-  return s;
-}
-
-/** BM25 检索：候选条目 → BM25 分数（rel，过滤 0 分）→ 贪心 MMR 排重（λ 默认 0.85，相对阈值 0.2）。
- *  与 LoCoMo-Plus 验证实现 retrieve_bm25.mjs 完全一致；返回 [{ idx, score }]，按选入顺序。 */
-export function bm25Retrieve(entries, query, stats, opts = {}) {
-  const k = Number(opts.topk ?? 10) || 10;
-  const qToks = tokenizeForSim(query);
-  const docText = (e) => e.block ?? e.text ?? "";
-  const scores = entries.map((e) => bm25Score(qToks, tokenizeForSim(docText(e)), stats));
-  const scored = entries
-    .map((e, i) => [scores[i], i, tokenizeForSim(docText(e))])
-    .filter(([rel]) => rel > 0);
-  const lam = Number(opts.lambda ?? 0.85) || 0.85;
-  const idxs = mmrSelect(scored, k, lam, 0.2);
-  return idxs.map((i) => ({ idx: i, score: scores[i] }));
-}
-
-/** 按 ref 定位 warm 条目：支持 `[n]` 编号（linghun_memory_read 展示顺序，1-based）或内容片段。
- *  匹配双方先剥 markdown 标记。返回 { index, entry } 或 null。 */
-export function findWarmEntryRef(warm, ref) {
-  const entries = parseWarm(warm);
-  if (!entries.length) return null;
-  const key = normalizeForMatch(String(ref ?? "")).trim();
-  if (!key) return null;
-  const num = key.match(/^\[(\d+)\]$/);
-  if (num) {
-    const idx = Number(num[1]) - 1;
-    if (idx >= 0 && idx < entries.length) return { index: idx, entry: entries[idx] };
-    return null;
-  }
-  const idx = entries.findIndex((e) => normalizeForMatch(e.block).includes(key));
-  if (idx < 0) return null;
-  return { index: idx, entry: entries[idx] };
-}
-
-/** 用 nextBlock 替换 ref 命中的条目（保留原位置，其他条目不变）。无匹配返回 null。 */
-export function replaceWarmEntryText(warm, ref, nextBlock) {
-  const found = findWarmEntryRef(warm, ref);
-  if (!found) return null;
-  const entries = parseWarm(warm);
-  entries[found.index] = { ...entries[found.index], block: nextBlock.trim() };
-  return `${entries.map((e) => e.block).join("\n\n")}\n`;
-}
-
-/** 把 ref 命中的条目标记为 wrong（被翻转）：标题 confidence 改 wrong，内容保留（追溯）。无匹配返回 null。 */
-export function markWrongWarmEntryText(warm, ref) {
-  const found = findWarmEntryRef(warm, ref);
-  if (!found) return null;
-  const entries = parseWarm(warm);
-  const next = entries[found.index].block.replace(
-    /^## (.+?)(?:\s+\[[a-z_]+\])?(?:\s+(?:high|medium|low|wrong))?\s*$/m,
-    (_m, stamp) => `${stamp} [fact] wrong`,
-  );
-  entries[found.index] = { ...entries[found.index], block: next, confidence: "wrong" };
-  return `${entries.map((e) => e.block).join("\n\n")}\n`;
-}
-
-/** 查近似重复：新内容与已有条目归一化后完全相等（equal）或短者是长者的子串且长度差 < 1.8 倍（contains）。
- *  命中返回 { index, entry, reason }，否则 null。只合并"几乎一样"的，不误伤不同事实。 */
-export function findNearDuplicateWarm(warm, content) {
-  const entries = parseWarm(warm);
-  if (!entries.length) return null;
-  const key = normalizeText(content);
-  if (!key) return null;
-  for (let i = 0; i < entries.length; i++) {
-    const body = normalizeText(entries[i].block);
-    if (!body) continue;
-    if (body === key) return { index: i, entry: entries[i], reason: "equal" };
-    const [short, long] = body.length <= key.length ? [body, key] : [key, body];
-    if (short.length > 0 && long.includes(short) && long.length <= short.length * 1.8) {
-      return { index: i, entry: entries[i], reason: "contains" };
-    }
-  }
-  return null;
-}
-
-/** 标记 warm 中「被用到」的条目（block 包含 ref 片段）刷新 last_access。
- *  读≠用：只有显式 touch 才算被调用=活跃。返回 { text, touched }；无变化 text=null。
- *  匹配时双方先剥 markdown 标记（normalizeForMatch），写盘保留原文。 */
-export function touchWarmAccessText(warm, ref, stamp) {
-  const entries = parseWarm(warm);
-  const key = ref ? normalizeForMatch(ref).trim() : "";
-  if (!entries.length || !key) return { text: null, touched: 0 };
-  let changed = false;
-  let touched = 0;
-  const blocks = entries.map((e) => {
-    if (!normalizeForMatch(e.block).includes(key)) return e.block;
-    touched += 1;
-    if (!/<!-- last_access: [^>]+ -->/.test(e.block)) {
-      changed = true;
-      return `${e.block}\n<!-- last_access: ${stamp} -->`;
-    }
-    const next = e.block.replace(
-      /<!-- last_access: [^>]+ -->/,
-      `<!-- last_access: ${stamp} -->`,
-    );
-    if (next !== e.block) changed = true;
-    return next;
+/** 画像速览（注入用，默认 300 字预算）：每主体一行——主体名 + 摘要 + 有内容的槽位计数。
+ *  只做索引密度导航，不倾倒画像全文；细节由 linghun_profile_get 按需读。 */
+export function renderProfileIndex(profiles, opts = {}) {
+  const list = (Array.isArray(profiles) ? profiles : [profiles]).filter(Boolean);
+  if (!list.length) return "";
+  const cap = Math.max(0, Math.floor(opts.maxChars ?? 300));
+  const rows = list.map((p) => {
+    const filled = PROFILE_SLOTS.filter((s) => (p.slots?.[s] ?? []).length > 0);
+    const count = filled.length
+      ? `（槽：${filled.map((s) => `${s}${p.slots[s].length}`).join("/")}）`
+      : "";
+    const sum = p.summary ? `—— ${p.summary}` : "";
+    return `- ${p.subject}${sum}${count}`;
   });
-  return { text: changed ? `${blocks.join("\n\n")}\n` : null, touched };
+  let out = `## 人物画像 / Profiles\n${rows.join("\n")}`;
+  if (out.length <= cap) return out;
+  // 超出预算：只保留主体名 + 摘要，砍掉槽位计数
+  out = `## 人物画像 / Profiles\n${list.map((p) => `- ${p.subject}${p.summary ? `—— ${p.summary}` : ""}`).join("\n")}`;
+  if (out.length <= cap) return out;
+  return truncateKeepHead(out, cap);
 }
 
-/**
- * @param root     记忆根目录（函数或字符串）
- * @param readText 读取函数，缺失时返回 null（可带 mtime 缓存）
- */
-/** 冷储摘要：把暖态原文压成「每条一行」的锚点（F4：cold 只放摘要，不倾倒原文）。
- *  返回行数组；wrong（被翻转）条目跳过。行首带 kind 标记（event/fact/rule/legacy），冷储可读。 */
-export function summarizeWarmForCold(warmText) {
-  const entries = parseWarm(String(warmText ?? "")).filter((e) => e.confidence !== "wrong");
-  return entries.map((e) => {
-    const body = e.block.replace(/\n?<!-- last_access: [^>]+ -->/, "").trim();
-    const bodyLines = body.split("\n").map((l) => l.trim()).filter(Boolean);
-    const contentLine = bodyLines.find((l) => !l.startsWith("##")) ?? bodyLines[0] ?? "";
-    const brief = contentLine.replace(/\s+/g, " ").slice(0, 60);
-    const tag = e.confidence === "high" ? "[high] " : e.confidence === "low" ? "[low] " : "";
-    const k = e.kind !== "legacy" ? `[${e.kind}] ` : "";
-    return `- ${k}${tag}${brief}`;
-  });
-}
-
-/** 从前往后按条目边界截断（\n\n 分块），不切在字符中间；单块本身超限才字符截断。
- *  返回保留下来的头段；cap<=0 或放不下任何块时返回空串（调用方据此停止）。 */
-export function truncateKeepHead(text, cap) {
-  if (cap <= 0) return "";
-  if (text.length <= cap) return text;
-  const blocks = String(text).split(/\n\n/);
-  const out = [];
-  let used = 0;
-  for (const b of blocks) {
-    if (used + b.length > cap) {
-      if (!out.length) return `${b.slice(0, cap)}\n…(截断)…`;
-      break;
+/** 画像全文渲染（linghun_profile_get 用）：摘要 + 六槽完整条目。 */
+export function renderProfileFull(profile, opts = {}) {
+  if (!profile) return "";
+  const parts = [];
+  parts.push(`# 画像：${profile.subject}`);
+  if (profile.summary) parts.push(`> 摘要：${profile.summary}`);
+  const slotFilter = Array.isArray(opts?.slots) ? opts.slots : PROFILE_SLOTS;
+  for (const slot of PROFILE_SLOTS) {
+    if (slotFilter.includes(slot)) {
+      const entries = profile.slots?.[slot] ?? [];
+      if (!entries.length) continue;
+      parts.push(`## ${slot}\n${entries.map((e) => `- ${e.text}`).join("\n")}`);
     }
-    out.push(b);
-    used += b.length + 2;
   }
-  return out.join("\n\n");
+  const rendered = parts.join("\n\n");
+  if (!rendered) return `# 画像：${profile.subject}\n> 暂无画像内容，可用 linghun_profile_update 沉淀。`;
+  const cap = Math.max(0, Math.floor(opts?.maxChars ?? 4000));
+  return rendered.length <= cap ? rendered : truncateKeepHead(rendered, cap);
+}
+
+/** 主体名归一为文件名安全形式（画像文件主键）。空/非法输入回退 "unknown"。 */
+export function normalizeSubject(subject) {
+  const s = String(subject ?? "").trim();
+  const clean = s.replace(/[^a-zA-Z0-9\u4e00-\u9fa5_-]/g, "");
+  return clean || "unknown";
+}
+
+/** 画像槽位追加/更新（upsert）：返回新画像文本。
+ *  语义对齐 warm 的 update：update 命中（前缀/包含匹配，剥时间戳）时旧条目标注 ⚠️ 已更新；
+ *  新条目插入目标槽段末尾（同槽相邻）；无目标槽段时新建 `## <slot>` 段；update 未命中则直接追加新条目。
+ *  slot 不在六槽内归入 "other"；空 entry 返回 null（调用方报错）。 */
+export function upsertProfileSlotText(text, slot, entry, update, stamp) {
+  const entryText = String(entry ?? "").trim();
+  if (!entryText) return null;
+  const marker = stamp ? `（${stamp}）` : "";
+  const line = `- ${entryText}${marker}`;
+  if (!PROFILE_SLOTS.includes(slot)) slot = "other";
+  const raw = String(text ?? "");
+  if (!raw.trim()) {
+    return `# 画像：未知\n\n## ${slot}\n${line}\n`;
+  }
+  const lines = raw.split(/\r?\n/);
+  // 1) 找 update 目标（任意槽位条目）
+  let hitIdx = -1;
+  if (update) {
+    const un = normalizeForMatch(String(update));
+    for (let i = 0; i < lines.length; i++) {
+      const t = lines[i].trim();
+      if (!t.startsWith("-")) continue;
+      let body = t.replace(/^-+\s*/, "").trim();
+      body = body.replace(/\s*（\d{4}-\d{2}-\d{2}.*?）\s*$/, "").trim();
+      if (!body) continue;
+      const bn = normalizeForMatch(body);
+      if (bn === un || bn.startsWith(un) || bn.includes(un)) {
+        hitIdx = i;
+        break;
+      }
+    }
+  }
+  // 2) 定位目标槽段（## slot 头 到 下一段头 之间）
+  let slotStart = -1;
+  let slotEnd = lines.length;
+  let inTarget = false;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].trim().match(/^##\s*([a-z_]+)\s*$/);
+    if (m) {
+      if (inTarget) {
+        slotEnd = i;
+        break;
+      }
+      if (m[1] === slot) {
+        inTarget = true;
+        slotStart = i;
+      }
+    }
+  }
+  if (!inTarget) {
+    return `${raw.trimEnd()}\n\n## ${slot}\n${line}\n`;
+  }
+  // 3) 命中 update：旧条目标注 ⚠️ 已更新（保留现场，供追溯）
+  const out = [...lines];
+  if (hitIdx >= 0) {
+    const oldBody = out[hitIdx].replace(/^-+\s*/, "").trim();
+    out[hitIdx] = oldBody ? `- ~~${oldBody}~~ ⚠️ 已更新` : out[hitIdx];
+  }
+  // 4) 新条目插入：命中且同槽 → 紧跟旧条目；否则目标槽段末尾
+  let pos = Math.min(slotEnd, out.length);
+  if (hitIdx >= 0 && hitIdx >= slotStart && hitIdx < slotEnd) pos = hitIdx + 1;
+  out.splice(pos, 0, line);
+  return out.join("\n");
 }
 
 export function createMemoryLayout(root, readText) {
@@ -436,8 +205,13 @@ export function createMemoryLayout(root, readText) {
   const coldFile = () => join(memoryRoot(), COLD);
   const episodicDir = () => join(memoryRoot(), EPISODIC_DIR);
   const journalDir = () => join(memoryRoot(), JOURNAL_DIR);
-  /** 三本体档案文件：记忆本体（事件时间线）/ 知识本体（精确值）。规则本体在 ontology.js（rules.md）。 */
-  const memoryOntologyFile = () => join(memoryRoot(), MEMORY_ONTOLOGY);
+  /** 本体档案与记忆文件：记忆（事件时间线）/ 知识本体（精确值）。规则本体在 ontology.js（rules.md）。 */
+  const memoryOntologyFile = () => {
+    const next = join(memoryRoot(), MEMORY_TIMELINE);
+    if (existsSync(next)) return next;
+    const legacy = join(memoryRoot(), MEMORY_TIMELINE_LEGACY);
+    return existsSync(legacy) ? legacy : next;
+  };
   const knowledgeOntologyFile = () => join(memoryRoot(), KNOWLEDGE_ONTOLOGY);
 
   const readFile = (file) => {
@@ -484,17 +258,48 @@ export function createMemoryLayout(root, readText) {
         .map((entry) => {
           const file = join(episodicDir(), entry.name);
           const text = readText(file);
+          const parsed = parseEpisodicUnit(text);
           const lines = (text ?? "").split(/\r?\n/);
-          const firstContent = lines.find((line) => line.trim() && !line.startsWith("#"));
+          const firstContent = lines.find((line) => line.trim() && !line.startsWith("#") && !line.startsWith("-"));
           return {
             file,
             name: basename(entry.name, ".md"),
             title: firstContent ? firstContent.trim().slice(0, 120) : "",
+            stamp: parsed.stamp ?? "",
+            theme: parsed.theme ?? "",
+            subjects: parsed.subjects ?? [],
           };
         });
     } catch {
       return [];
     }
+  };
+
+  /** v0.3.0：写冷储原文单元（一 session 一文件）。幂等：同文件名已存在不覆盖（原文不动档案）；
+   *  同日同主题冲突时自动加 -2/-3 序号（同一天多个 session 同名主题时保证都落盘）。
+   *  返回 {file, name, created}；created=false 表示已存在（保留旧档案）。 */
+  const appendEpisodicUnit = (unit) => {
+    try {
+      let name = unitFileName(unit.stamp ?? "", unit.theme ?? "");
+      let seq = 1;
+      while (existsSync(join(episodicDir(), name))) {
+        seq++;
+        name = unitFileName(unit.stamp ?? "", unit.theme ?? "", seq);
+      }
+      const file = join(episodicDir(), name);
+      mkdirSync(episodicDir(), { recursive: true });
+      writeFileSync(file, renderEpisodicUnit(unit), "utf8");
+      return { file, name, created: true };
+    } catch {
+      return null;
+    }
+  };
+
+  /** v0.3.0：读冷储单元全文（不存在返回 ""） */
+  const readEpisodicUnit = (name) => {
+    const base = String(name ?? "").replace(/\.md$/, "");
+    const file = join(episodicDir(), `${base}.md`);
+    return readFile(file);
   };
 
   return {
@@ -504,10 +309,54 @@ export function createMemoryLayout(root, readText) {
     journalDir,
     memoryOntologyFile,
     knowledgeOntologyFile,
+    appendEpisodicUnit,
+    readEpisodicUnit,
+    profilesDir: () => join(memoryRoot(), PROFILES_DIR),
+    /** 读指定主体画像文件（不存在返回 ""）。 */
+    readProfile: (subject) => readFile(join(memoryRoot(), PROFILES_DIR, `${normalizeSubject(subject)}.md`)),
+    /** 列全部画像（解析为 { subject, summary, slots } 数组，供速览注入/状态展示）。 */
+    listProfiles: () => {
+      try {
+        const dir = join(memoryRoot(), PROFILES_DIR);
+        return readdirSync(dir, { withFileTypes: true })
+          .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".md"))
+          .sort((a, b) => a.name.localeCompare(b.name, "en"))
+          .map((entry) => parseProfiles(readFile(join(dir, entry.name))))
+          .filter(Boolean);
+      } catch {
+        return [];
+      }
+    },
     readWarm: () => readFile(warmFile()),
     readCold: () => readFile(coldFile()),
     readMemoryOntology: () => readFile(memoryOntologyFile()),
     readKnowledgeOntology: () => readFile(knowledgeOntologyFile()),
+    /** 本体资源池（DSH 本体分工定案：知识+规则存储合并、使用归 linghun 收口者）：
+     *  统一只读视图 = 知识本体（精确值）+ 规则本体（纪律）合并；物理文件保持
+     *  knowledge_ontology.md / rules.md 不动，逻辑上是一个本体资源池，
+     *  供 linghun 收口侧按需装配读取（收口者的上下文工程）。 */
+    readOntologyPool() {
+      const ontK = readFile(knowledgeOntologyFile());
+      const rulesFile = join(memoryRoot(), "rules.md");
+      const rulesText = readFile(rulesFile);
+      const parts = [];
+      if (ontK.trim()) parts.push(`## 知识本体 / Knowledge\n${ontK.trim()}`);
+      if (rulesText.trim()) parts.push(`## 规则本体 / Rules\n${rulesText.trim()}`);
+      return parts.join("\n\n");
+    },
+    /** 本体资源池只读索引：分区 + 主题/桶 + 条目数，供 linghun 装配时快速定位命中。 */
+    listOntologyPool() {
+      const ontK = readFile(knowledgeOntologyFile());
+      const rulesFile = join(memoryRoot(), "rules.md");
+      const rulesText = readFile(rulesFile);
+      const kThemes = [...ontK.matchAll(/^##\s+(.+)$/gm)].map((m) => m[1].trim());
+      const kEntries = (ontK.match(/^[-*]\s+/gm) ?? []).length;
+      const rBuckets = parseRulesBuckets(rulesText);
+      return {
+        knowledge: { file: KNOWLEDGE_ONTOLOGY, themes: kThemes, entries: kEntries },
+        rules: { file: "rules.md", themes: rBuckets.map((b) => b.name), entries: rBuckets.length },
+      };
+    },
     listEpisodic,
     appendJournal,
     listJournal,
@@ -532,7 +381,7 @@ export function createMemoryLayout(root, readText) {
       return kept.join("\n");
     },
 
-    /** 注入用渲染：三本体档案（知识/规则/记忆）+ 冷储摘要 + 归档/序时账索引，截断到 maxChars。
+    /** 注入用渲染：本体档案与记忆（知识/规则/记忆）+ 冷储摘要 + 归档/序时账索引，截断到 maxChars。
      *  写侧协议 v1：本体档案（结构化可查视图）优先注入——知识本体（精确值）→ 规则本体（纪律）→
      *  事件时间线（时序）→ 冷储摘要（高抽象经验）；暖态近期记忆（warm）默认不进注入段
      *  （近期记忆由 linghun_memory_read 按需读取），仅当 opts.injectWarm === true 时追加。
@@ -553,7 +402,7 @@ export function createMemoryLayout(root, readText) {
       const rulesFile = join(memoryRoot(), "rules.md");
       const rulesText = readFile(rulesFile);
       if (rulesText.trim()) parts.push(`## 规则本体 / Rules\n${rulesText.trim()}`);
-      // 记忆本体（事件时间线，回答"什么时候/顺序"）
+      // 记忆（事件时间线，回答"什么时候/顺序"）
       const ontM = readFile(memoryOntologyFile());
       if (ontM.trim()) parts.push(`## 事件时间线 / Timeline\n${ontM.trim()}`);
       // 近期记忆默认不进注入段（高频高抽象优先；近期由 linghun_memory_read 按需读）
@@ -622,3 +471,16 @@ export function createMemoryLayout(root, readText) {
     },
   };
 }
+
+/* ================= v0.3.0 原文单元 + 暖态=当前条目 =================
+ * 记忆单元=冷储原文 md 文件（一 session 一文件）；暖态=当前条目（工作记忆）：
+ * 冷储不动，检索命中把原文复制到暖态激活。图谱（graph.js）连接单元与画像要素。
+ * 单元文件格式（episodic/<时间戳>_session_<主题slug>.md）：
+ *   # 记忆单元
+ *   - stamp: <ISO时间戳>
+ *   - theme: <主题>
+ *   - subjects: <s1>, <s2>
+ *
+ *   <原文全文……>
+ */
+

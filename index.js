@@ -15,13 +15,16 @@
  */
 import { readFileSync, statSync } from "node:fs";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import z from "@deepseek-ai/schemastery";
 import { resolveDshHome } from "@deepseek-ai/dsh-home-paths";
 import { defineTool } from "@deepseek-ai/dsh-tools";
-import { DEFAULT_IDENTITY, DEFAULT_JUDGMENT, DEFAULT_USER_CARD, MEMORY_DISCIPLINE, COGNITION_CYCLE, resolveIdentity } from "./identity.js";
-import { createMemoryLayout, parseWarm, renderWarmEntries, summarizeWarmForCold, touchWarmAccessText, findWarmEntryRef, replaceWarmEntryText, markWrongWarmEntryText, findNearDuplicateWarm, sortWarmNewestFirst, filterWarmByRef, filterTextByRef, matchRef } from "./memory.js";
-import { writeOntologySafe, appendRulesSafe } from "./ontology.js";
+
+
+import { MEMORY_DISCIPLINE, COGNITION_CYCLE, PROFILE_DISCIPLINE } from "./identity.js";
+import { createMemoryLayout, parseWarm, renderWarmEntries, summarizeWarmForCold, touchWarmAccessText, findWarmEntryRef, replaceWarmEntryText, markWrongWarmEntryText, findNearDuplicateWarm, sortWarmNewestFirst, filterWarmByRef, filterTextByRef, matchRef, tokenizeForSim, buildBm25Stats, bm25Retrieve, parseProfiles, renderProfileIndex, renderProfileFull, upsertProfileSlotText, normalizeSubject, PROFILE_SLOTS, activateWarmUnit, renderEpisodicIndex, parseEpisodicUnit, unitFileName } from "./memory.js";
+import { parseGraph, renderGraph, buildGraph, queryGraph, graphFromJson, graphToJson, renderGraphIndex, normalizeSubject as graphNormSubject, unitNodeId, subjectNodeId, profileNodeId, GRAPH_FILE, GRAPH_JSON } from "./graph.js";
+import { writeOntologySafe, appendRulesSafe, parseRulesBuckets } from "./ontology.js";
 import { parseGoals, serializeGoals, sortGoals, mergeGoalSignal, rankGoalsByTrigger, renderGoalsForInject, GOAL_DISCIPLINE } from "./goal.js";
 import { renderMemoryMap, MAP_DISCIPLINE } from "./map.js";
 
@@ -29,53 +32,18 @@ const name = "linghun";
 const inject = ["systemPrompt", "tools"];
 const NS = "linghun";
 
-const SECTION_IDENTITY = "soul:identity";
-const SECTION_JUDGMENT = "soul:judgment";
 // 记忆体线 section 命名空间独立：与旧线 dsh-linghun 的 soul:memory 隔离，
 // 两条线并存时 prompt section 不冲突。
 const SECTION_MEMORY = "soul:linghun-memory";
 
 const MEMORY_DIR = join("linghun", "memory");
-/** 用户人设文件：$DSH_HOME/linghun/identity.md —— 用户自己写人设的地方，文件优先。 */
-const IDENTITY_FILE = join("linghun", "identity.md");
-
-/** 从灵魂卡文件文本解析「名字：xxx」；找不到返回 null。 */
-function parseName(text) {
-  if (!text) return null;
-  for (const line of text.split(/\r?\n/)) {
-    const m = line.match(/^\s*名字[:：]\s*(.+?)\s*$/);
-    if (m && m[1] && m[1] !== "（你的名字或称呼）") return m[1];
-  }
-  return null;
-}
-
 const Config = z.object({
-  identity: z.object({
-    /** 灵魂名字：留空则只用默认卡片内容；填写后追加为「我的名字」。 */
-    name: z.string().default(""),
-    /** 灵魂卡内容（身份锚点）。 */
-    content: z.string().default(""),
-    /** 灵魂卡总开关：false 则完全不注入身份段落。 */
-    enabled: z.boolean().default(true),
-    /** 段落顺序：数字越小越靠前（多 section 模式下控制先后）。 */
-    order: z.number().default(0),
-    /** linghun_soul_update 拒绝超过此大小（字节）。 */
-    maxBytes: z.number().default(64 * 1024),
-    /** 灵魂卡覆盖模式：complete=true 时 soul:identity 注册为 dsh-system-prompt 的
-     *  complete section（装配后唯一保留），覆盖 DSH 底座默认身份指涉；
-     *  judgment/memory 合并进同一 section，避免被 complete 抑制机制丢弃。
-     *  默认 false 保持三 section 现状。 */
-    complete: z.boolean().default(false),
-  }),
-  judgment: z.object({
-    /** 判断纪律开关：false 则不注入「边界扫描」判断纪律段落。 */
-    enabled: z.boolean().default(true),
-    /** 段落顺序：默认排在身份段之后、记忆段之前。 */
-    order: z.number().default(0.2),
-  }),
   memory: z.object({
     /** 海马体总开关：false 则记忆完全停用（不读不写不注入）。 */
     enabled: z.boolean().default(true),
+    /** 禁用的工具名列表：命中则注册时跳过（如 linghun_memory_read/linghun_graph_query）。
+     *  用于评测隔离——设置 assembler + 禁模型阅读记忆工具时，模型只剩作答通道。 */
+    disableTools: z.array(z.string()).default([]),
     /** 是否注入记忆：true=记+注入；false=只记不注入（模型看不到记忆）。 */
     inject: z.boolean().default(true),
     /** 注入预算上限（字符）：每次注入的记忆总长度不超过此值。 */
@@ -260,6 +228,12 @@ function apply(ctx, config) {
 
   const cfg = () => (sourceGetter ? sourceGetter() : config);
 
+  /** 评测隔离：命中 memory.disableTools 的工具不注册（模型无法调用）。 */
+  const regTool = (name, tool) => {
+    if ((cfg()?.memory?.disableTools ?? []).includes(name)) return;
+    ctx.tools.register(tool);
+  };
+
   /** 同步 mtime 缓存读取；缺失/不可读返回 null。 */
   const readCached = (file) => {
     try {
@@ -275,8 +249,75 @@ function apply(ctx, config) {
   };
 
   const memoryDir = () => join(resolveDshHome(), MEMORY_DIR);
-  const identityFile = () => join(resolveDshHome(), IDENTITY_FILE);
   const layout = createMemoryLayout(memoryDir, readCached);
+
+  // ── v0.3.0 图谱（graph.js）：单元↔画像要素的关系网 ─────────────────
+  const graphDir = () => join(resolveDshHome(), "linghun", "graph");
+  const graphMdFile = () => join(graphDir(), GRAPH_FILE);
+  const graphJsonFile = () => join(graphDir(), GRAPH_JSON);
+
+  /** 读图谱：graph.json 优先，缺失/损坏回退 graph.md 解析。 */
+  const readGraph = () => {
+    const j = readCached(graphJsonFile());
+    if (j) {
+      try {
+        return JSON.parse(j);
+      } catch {
+        /* json 损坏回退 md */
+      }
+    }
+    const m = readCached(graphMdFile());
+    return m ? parseGraph(m) : null;
+  };
+
+  /** 写图谱双格式（md 人读 + json 机器读）。 */
+  const writeGraph = async (g) => {
+    await ensureParent(graphMdFile());
+    await writeFile(graphMdFile(), renderGraph(g), "utf8");
+    fileCache.delete(graphMdFile());
+    await writeFile(graphJsonFile(), graphToJson(g), "utf8");
+    fileCache.delete(graphJsonFile());
+  };
+
+  /** 从冷储单元 + 画像文件全量重建图谱（幂等）。 */
+  const buildGraphFromFiles = async () => {
+    const units = layout.listEpisodic().map((e) => ({
+      file: basename(e.file),
+      stamp: e.stamp ?? "",
+      theme: e.theme ?? "",
+      subjects: e.subjects ?? [],
+      title: e.title ?? "",
+    }));
+    const profiles = layout.listProfiles();
+    // 画像要素文本 → 边线索：单元内容含画像要素关键词 → supports；单元与要素同主体但内容冲突 → contradicts（由 hint 文件提供）
+    const hintEdges = readGraphHints();
+    const g = buildGraph({ units, profiles, hintEdges });
+    await writeGraph(g);
+    return g;
+  };
+
+  /** 读取 hint 边文件（graph/hints.json）：手工/模型写进去的 supports/contradicts 线索。
+   *  格式：[{from:"U:episodic/x.md", rel:"supports|contradicts", to:"P:Caroline:fact:0"}] */
+  const readGraphHints = () => {
+    const raw = readCached(join(graphDir(), "hints.json"));
+    if (!raw) return [];
+    try {
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  };
+
+  /** 追加 hint 边（幂等去重后写回）。 */
+  const appendGraphHint = async (from, rel, to) => {
+    const file = join(graphDir(), "hints.json");
+    const cur = readGraphHints();
+    if (cur.some((e) => e.from === from && e.rel === rel && e.to === to)) return;
+    await ensureParent(file);
+    await writeFile(file, JSON.stringify([...cur, { from, rel, to }], null, 1), "utf8");
+    fileCache.delete(file);
+  };
 
   // ── 目标系统（goal.js）：目标档案 CRUD + 读侧残差触发 ────────────────
   const goalsFile = () =>
@@ -373,40 +414,18 @@ function apply(ctx, config) {
   };
 
   // ── prompt sections（function text：按 assembly 动态解析）──────────────
-  const renderIdentity = () => {
-    const c = cfg();
-    if (c.identity?.enabled === false) return "";
-    const content = resolveIdentity({
-      fileText: readCached(identityFile()),
-      configContent: c.identity?.content,
-    });
-    const soulName = (c.identity?.name ?? "").trim();
-    return soulName ? `${content}\n\n> 我的名字：${soulName}` : content;
-  };
-  const renderJudgment = () =>
-    cfg().judgment?.enabled === false ? "" : DEFAULT_JUDGMENT;
-  const renderMemory = () => {
-    const c = cfg();
-    if (c.memory?.enabled === false || c.memory?.inject === false) return "";
-    // 组装模式（提取侧子智能体）：配置 injectPath / 环境变量 / 默认约定路径（与 assembler 侧零配置联动）
-    const asmPath =
-      (c.memory?.assembler?.injectPath ?? "").trim() ||
-      process.env.LINGHUN_MEMORY_OVERRIDE ||
-      join(resolveDshHome(), "linghun", "memory", "assembled.md");
-    if (asmPath) {
-      try {
-        const text = readFileSync(asmPath, "utf8").trim();
-        if (text) return `> ${c.memory?.assembler?.label}\n\n${text}`;
-      } catch {
-        /* 文件不可读则回退默认注入 */
-      }
-    }
-    const rendered = layout.renderForInject(c.memory?.injectMaxChars, {
-      timeWeight: c.memory?.timeWeight,
-      injectWarm: c.memory?.injectWarm,
-      mmr: c.memory?.mmr,
-    });
-    // 目标系统：读侧注入目标主线（GOAL_DISCIPLINE + 按触发分排序的目标清单）
+  /** ACC 模式注入纪律：素材不自动注入，由模型主动获取（agentic RAG 闭环）。 */
+  const ACC_DISCIPLINE = `## 主动认知控制（ACC）
+当前为 ACC 模式：记忆素材不自动注入，由你主动控制获取。
+- 全局状态：linghun_memory_status（暖冷条数/目标主线/已加载领域/可用工具）
+- 候选检索：linghun_retrieval_probe（只给候选不注入，挑 1-3 条 linghun_memory_read 精读）
+- 领域指导：知识本体按领域组织（linghun_memory_read kind=fact 读分领域主题），跨领域共性规律在规则本体（kind=rule），需要时主动读取
+- 数值/时间/文本计算：linghun_math_analyze（calc 表达式 / date 日期间隔 / relative 相对日期换算 / aggregate 聚合 / compare 比较 / text 字数统计）。检索到数值或日期证据后用它算，别硬算、别目测字数
+- 目标主线：linghun_goal_get / linghun_goal_state
+记忆写入/目标修改仍由系统自动完成，你不需要也不应该改档案。`;
+
+  /** 组装目标主线段（GOAL_DISCIPLINE + 按触发分排序的目标清单）。返回 { goalSection, goals }。 */
+  const renderGoalSection = (c) => {
     const goalsCfg = c.goals;
     let goalSection = "";
     let goals = [];
@@ -420,7 +439,11 @@ function apply(ctx, config) {
         /* 目标档案不可读则跳过目标主线 */
       }
     }
-    // 记忆地图（检索图方案）：写侧机制导航图（四轴+证据层），读侧按图回溯
+    return { goalSection, goals };
+  };
+
+  /** 组装记忆地图段（四轴导航 + 证据层）。返回 mapSection 文本。 */
+  const renderMapSection = (c, goals) => {
     const mapCfg = c.memory?.map;
     let mapSection = "";
     if (mapCfg?.enabled !== false) {
@@ -446,8 +469,88 @@ function apply(ctx, config) {
         if (process.env.LINGHUN_MAP_DEBUG === "1") console.error("[map] renderMemoryMap failed:", err);
       }
     }
+    return mapSection;
+  };
+
+  /** 组装人物画像导航段（主体轴 + 一句话摘要 + 画像纪律）。返回 profileSection 文本。 */
+  const renderProfileSection = () => {
+    const c = cfg();
+    const profileCfg = c.memory?.profiles;
+    if (profileCfg?.enabled === false) return "";
+    try {
+      const profiles = layout.listProfiles();
+      if (!profiles.length) return "";
+      const indexText = renderProfileIndex(profiles, {
+        maxChars: profileCfg?.injectMaxChars ?? 300,
+      });
+      if (!indexText) return "";
+      return `${PROFILE_DISCIPLINE}\n\n${indexText}`;
+    } catch (err) {
+      if (process.env.LINGHUN_MAP_DEBUG === "1") console.error("[profile] renderProfileSection failed:", err);
+      return "";
+    }
+  };
+
+  /** assembled.md 时效判定：超过 maxAgeMs 未更新即视为失效（assembler 每轮覆写）。 */
+  const asmFresh = (p, maxAgeMs) => {
+    try {
+      return Date.now() - statSync(p).mtimeMs <= maxAgeMs;
+    } catch {
+      return false;
+    }
+  };
+
+  const renderMemory = () => {
+    const c = cfg();
+    if (c.memory?.enabled === false || c.memory?.inject === false) return "";
+    // ACC 模式：注入收窄为核心导航层（地图/画像/纪律/目标），素材全部走工具主动获取。
+    if (c.memory?.acc?.enabled === true) {
+      const { goalSection, goals } = renderGoalSection(c);
+      const mapSection = renderMapSection(c, goals);
+      const profileSection = renderProfileSection();
+      const parts = [];
+      if (mapSection) parts.push(mapSection);
+      if (profileSection) parts.push(profileSection);
+      parts.push(ACC_DISCIPLINE);
+      if (goalSection) parts.push(goalSection);
+      const discipline = mapSection
+        ? `${MAP_DISCIPLINE}\n\n${MEMORY_DISCIPLINE}\n\n${COGNITION_CYCLE}`
+        : `${MEMORY_DISCIPLINE}\n\n${COGNITION_CYCLE}`;
+      return `${discipline}\n\n${parts.join("\n\n")}`;
+    }
+    // 组装模式（提取侧子智能体）：配置 injectPath / 环境变量 / 默认约定路径（与 assembler 侧零配置联动）
+    const asmPath =
+      (c.memory?.assembler?.injectPath ?? "").trim() ||
+      process.env.LINGHUN_MEMORY_OVERRIDE ||
+      join(resolveDshHome(), "linghun", "memory", "assembled.md");
+    // 2026-11-02 修：assembled.md 由 dsh-linghun-assembler 每轮 query 覆写。
+    // 未装 assembler 的 profile（如 lanke）没人刷新它，读到的是历史残留
+    // ——实测 10-29 的 corpus_search 单步任务条目被当记忆注入 4 天，
+    // 纪律段（MEMORY_DISCIPLINE/COGNITION_CYCLE/MAP_DISCIPLINE/GOAL_DISCIPLINE）
+    // 与 warm 全被跳过。加时效闸：超期视为失效，回退纪律段 + warm 注入。
+    const asmMaxAge = c.memory?.assembler?.maxAgeMs ?? 600000;
+    if (asmPath && asmFresh(asmPath, asmMaxAge)) {
+      try {
+        const text = readFileSync(asmPath, "utf8").trim();
+        if (text) return `> ${c.memory?.assembler?.label}\n\n${text}`;
+      } catch {
+        /* 文件不可读则回退默认注入 */
+      }
+    }
+    const rendered = layout.renderForInject(c.memory?.injectMaxChars, {
+      timeWeight: c.memory?.timeWeight,
+      injectWarm: c.memory?.injectWarm,
+      mmr: c.memory?.mmr,
+    });
+    // 目标系统：读侧注入目标主线（GOAL_DISCIPLINE + 按触发分排序的目标清单）
+    const { goalSection, goals } = renderGoalSection(c);
+    // 记忆地图（检索图方案）：写侧机制导航图（四轴+证据层），读侧按图回溯
+    const mapSection = renderMapSection(c, goals);
+    // 人物画像（主体轴）：有哪些主体 + 各画像一句话摘要，先画像后下钻
+    const profileSection = renderProfileSection();
     const parts = [];
     if (mapSection) parts.push(mapSection);
+    if (profileSection) parts.push(profileSection);
     if (rendered) parts.push(rendered);
     if (goalSection) parts.push(goalSection);
     if (!parts.length) return "";
@@ -457,7 +560,7 @@ function apply(ctx, config) {
     return `${discipline}\n\n${parts.join("\n\n")}`;
   };
 
-  const sectionDisposers = { identity: null, judgment: null, memory: null };
+  const sectionDisposers = { memory: null };
   function registerSections() {
     for (const key of Object.keys(sectionDisposers)) {
       if (sectionDisposers[key]) {
@@ -465,25 +568,9 @@ function apply(ctx, config) {
         sectionDisposers[key] = null;
       }
     }
-    if (cfg().identity?.complete) {
-      // 灵魂卡覆盖模式：只注册一个 complete section（身份+判断+记忆合并渲染）。
-      // dsh-system-prompt 装配时 complete section 唯一保留，
-      // DSH 底座默认身份指涉全部被抑制——灵魂卡成为唯一身份来源。
-      sectionDisposers.identity = ctx.systemPrompt.section({
-        name: SECTION_IDENTITY,
-        order: cfg().identity?.order ?? 0,
-        text: () =>
-          [renderIdentity(), renderJudgment(), renderMemory()]
-            .filter(Boolean)
-            .join("\n\n"),
-        interpolate: false,
-        complete: true,
-      });
-      return;
-    }
-    // 默认模式：记忆体线只注册记忆 section（soul:linghun-memory）。
-    // 身份/判断 section 由旧线 dsh-linghun（灵魂卡）或底座提供——两条线并存不冲突；
-    // standalone 用完整灵魂卡时走上方 identity.complete 覆盖模式。
+    // 记忆体线只注册记忆 section（soul:linghun-memory）。
+    // 收口者（灵魂卡/判断纪律）回到 linghun 侧（dsh-linghun 收口者线）提供，
+    // 记忆体插件不再注入身份/判断——回归记忆定位（v0.4.0 架构调整）。
     sectionDisposers.memory = ctx.systemPrompt.section({
       name: SECTION_MEMORY,
       order: cfg().memory?.order ?? 0.5,
@@ -492,24 +579,7 @@ function apply(ctx, config) {
     });
   }
 
-  /** 首次运行：在人设目录放一份默认灵魂卡（幂等，已有文件则不动，尊重用户编辑）。 */
-  const ensureIdentityFile = async () => {
-    try {
-      const file = identityFile();
-      await ensureParent(file);
-      try {
-        readFileSync(file, "utf8");
-      } catch {
-        await writeFile(file, DEFAULT_USER_CARD.trimEnd() + "\n", "utf8");
-        fileCache.delete(file);
-      }
-    } catch {
-      // 非致命：写不进去就继续用默认卡 / 配置内容
-    }
-  };
-
   ctx.effect(() => {
-    void ensureIdentityFile();
     registerSections();
     return () => {
       for (const key of Object.keys(sectionDisposers)) {
@@ -721,13 +791,16 @@ function apply(ctx, config) {
    *  返回 { mode: "append" | "update" | "dedupe", bytes, totalBytes }。 */
   const appendMemoryBlock = async (content, kind, opts = {}) => {
     const stamp = nowStamp();
+    // 写侧相对时间锚定（v0.4.3）：today/by Friday/EOD 之类就地标成 [=YYYY-MM-DD]，读侧不再重算。
+    content = anchorRelativeDatesInText(content, stamp.slice(0, 10));
     const kindNorm = normalizeKind(kind);
     const conf = ["high", "medium", "low"].includes(opts.confidence) ? opts.confidence : "medium";
     const err = validateEntryFormat(kindNorm, content);
     if (err) {
       throw new Error(`linghun_memory_append: ${err}`);
     }
-    const block = `\n## ${stamp} [${kindNorm}] ${conf}\n\n${content}\n<!-- last_access: ${stamp} -->\n`;
+    const subjTag = opts.subject ? ` @${normalizeSubject(opts.subject)}` : "";
+    const block = `\n## ${stamp} [${kindNorm}] ${conf}${subjTag}\n\n${content}\n<!-- last_access: ${stamp} -->\n`;
     const file = layout.warmFile();
     const current = readCached(file) ?? "";
 
@@ -744,7 +817,7 @@ function apply(ctx, config) {
         }
         // 翻转：旧条目标 wrong，新内容追加为独立条目（默认 high，除非显式传 confidence）
         const flipped = markWrongWarmEntryText(current, opts.update);
-        const highBlock = `\n## ${stamp} [${kindNorm}] high\n\n${content}\n<!-- last_access: ${stamp} -->\n`;
+        const highBlock = `\n## ${stamp} [${kindNorm}] high${subjTag}\n\n${content}\n<!-- last_access: ${stamp} -->\n`;
         const next = flipped === null ? current : flipped;
         const finalText = `${next.trimEnd()}\n${highBlock.trim()}\n`;
         await ensureParent(file);
@@ -800,10 +873,10 @@ function apply(ctx, config) {
     return touched;
   };
 
-  ctx.tools.register(defineTool({
+  regTool('linghun_memory_append', defineTool({
     name: "linghun_memory_append",
     description:
-      "把一条带时间戳的**结构化认知条目**记进海马体暖态工位（warm.md），不是写叙述摘要。\n\n类别（kind）三型：\n- event（事件=记忆本体）：`主语 | 动作 | 宾语 | 关联实体 | 细节`——记录发生了什么；时间由条目自带。\n- fact（事实=知识本体）：`实体 | 属性 | 值 | 来源#`——记录是什么/多少，值必须精确（数字/日期/版本），来源指对话批次/事件。\n- rule（规则=规则本体）：一句可执行纪律（决策/偏好/经验），不要用结构行。\n\n一条目一事实，不要一次性倾倒。积累多了用 linghun_memory_consolidate 沉淀（按类别移出到本体档案：event→记忆本体时间线、fact 高置信→知识本体、rule→规则本体）。\n\n置信度（confidence）：high=用户直接说/已验证；medium=推断（默认）；low=存疑/猜测/过期待验。低置信条目注入时带【低置信·需验证】标记，引用时必须声明不确定。\n\n更新（update）：发现旧条目已被推翻/变更时，传 linghun_memory_read 返回的编号（如 [3]）或该条目内容片段——旧条目标记为 wrong（被翻转，不再注入），新内容另起一条（默认高置信）。近似重复内容会自动合并不追加。",
+      "把一条带时间戳的**结构化认知条目**记进海马体暖态工位（warm.md），不是写叙述摘要。\n\n类别（kind）三型：\n- event（事件=记忆本体）：`主语 | 动作 | 宾语 | 关联实体 | 细节`——记录发生了什么；时间由条目自带。\n- fact（事实=知识本体）：`实体 | 属性 | 值 | 来源#`——记录是什么/多少，值必须精确（数字/日期/版本），来源指对话批次/事件。\n- rule（规则=规则本体）：一句可执行纪律（决策/偏好/经验），不要用结构行。\n\n一条目一事实，不要一次性倾倒。积累多了用 linghun_memory_consolidate 沉淀（按类别移出到本体档案：event→记忆本体时间线、fact 高置信→知识本体、rule→规则本体）。\n\n置信度（confidence，必填）：high=用户直接说/已验证；medium=推断；low=存疑/猜测/过期待验。**每条都要显式判断档位，不许无脑填 medium**——high 条目注入时优先保留、永不因久未使用被挤出，low 条目带【低置信·需验证】标记。\n\n主体（subject）：建议每条都判断，用户本人的信息标 owner，助手侧约定标 assistant，第三方标其名字。\n\n更新（update）：发现旧条目已被推翻/变更时，传 linghun_memory_read 返回的编号（如 [3]）或该条目内容片段——旧条目标记为 wrong（被翻转，不再注入），新内容另起一条（默认高置信）。近似重复内容会自动合并不追加。\n\n**只记用户侧信息**：记用户说过什么、用户的事实、用户的规则。助手自己做了什么（采取了什么动作、检索了什么、给了什么判断）不入 warm——那是运行痕迹，写 journal。混进 warm 会让后续会话把自己的旧动作当成用户说过的话，向用户复述内部调度细节。",
     parameters: {
       kind: {
         type: "string",
@@ -813,12 +886,17 @@ function apply(ctx, config) {
       content: { type: "string", required: true, description: "要记住的结构化内容：event/fact 用 `|` 分隔的结构行（见 kind 说明），rule 用一句可执行纪律。不要写叙述段落" },
       confidence: {
         type: "string",
+        required: true,
         enum: ["high", "medium", "low"],
-        description: "置信度：high（用户直接说/已验证）/ medium（推断，默认）/ low（存疑/猜测/过期待验）",
+        description: "置信度，**必填，必须显式判断**。high=用户直接陈述的事实/决定，或已用工具、原文、代码验证过；medium=从上下文推断得出、用户未直接确认；low=猜测/存疑/含时效性但未复核。宁可填 medium 也不要谎报 high；但不要因为省事一律 medium——注入时 high 优先保留不被挤出、low 带【低置信·需验证】标记，档位错了后续引用就会出错",
       },
       update: {
         type: "string",
         description: "可选。要翻转/覆盖的旧条目：传 linghun_memory_read 返回的编号（如 [3]）或内容片段。命中后旧条目标记为 wrong（被翻转），新内容另起一条（默认高置信）。用于旧事实被推翻、决策变更、偏好改变等场景",
+      },
+      subject: {
+        type: "string",
+        description: "主体标签，**建议每一条都判断一次**。这条信息属于谁：用户本人的事实/偏好/决定填 owner；助手侧约定填 assistant；涉及具体第三方填其名字（如 张三）。标题行会带 @主体，可按主体过滤与下钻；不填则该条只能全局检索，无法按主体归集",
       },
     },
     output: {
@@ -850,28 +928,47 @@ function apply(ctx, config) {
       const kind = String(args.kind ?? "fact").trim() || "fact";
       const confidence = String(args.confidence ?? "").trim();
       const update = String(args.update ?? "").trim() || undefined;
-      return appendMemoryBlock(content, kind, { confidence, update });
+      const subject = String(args.subject ?? "").trim() || undefined;
+      return appendMemoryBlock(content, kind, { confidence, update, subject });
     },
     presentCall: (args) => ({ card: "generic", title: "海马体·记录", kind: "other", rawInput: args }),
   }));
 
-  ctx.tools.register(defineTool({
+  regTool('linghun_memory_read', defineTool({
     name: "linghun_memory_read",
     description:
-      "读取海马体记忆。kind 可选：event→只读记忆本体档案（事件时间线）、fact→只读知识本体档案（精确值）、rule→只读规则本体（纪律）、不传→冷储摘要（cold.md）+ 暖态近期（warm.md）+ 归档索引。需要细节时可读完整内容。读≠用：读到的条目只有实际派上用场，才用 linghun_memory_touch 标记（标记=活跃，吃灰管理）。",
+      "读取记忆。kind 可选：event→事件时间线、fact→知识本体（精确值）、rule→规则本体（纪律）、不传→综合视图。\n\nv0.3.0 检索路径（四级）：linghun_profile_get（画像要素）→ linghun_graph_query（图谱定位相关单元）→ linghun_memory_read（unit=单元文件精读冷储原文）→ 暖态自动激活（命中原文复制到 warm.md 工作记忆）。\n\n参数：ref 关键词定向过滤；unit=冷储单元文件名（如 2023-05-03_session_summer.md）直接读原文并复制到暖态；full=true 返回完整内容。多维筛选：confidence（high/medium/low/wrong 多选）、subject（主体）、kinds（event/fact/rule 多选），可与 ref 叠加。读≠用：实际派上用场的条目用 linghun_memory_touch 标记。",
     parameters: {
       kind: {
         type: "string",
         enum: ["event", "fact", "rule"],
-        description: "可选。只读某个本体档案：event=记忆本体（事件时间线）/ fact=知识本体（精确值）/ rule=规则本体（纪律）；不传则读综合视图（cold+warm+索引）",
+        description: "可选。只读某个本体档案：event=记忆本体（事件时间线）/ fact=知识本体（精确值）/ rule=规则本体（纪律）；不传则读综合视图（cold+warm+图谱索引）",
       },
       ref: {
         type: "string",
-        description: "可选。关键词过滤——只返回命中该关键词的条目/行（多词空格分隔=任一命中即可）。大记忆量下的定向读取：过滤后条目少、不受截断影响，优先用它精确定位（如传人名/项目名/时间词）",
+        description: "可选。关键词过滤——只返回命中该关键词的条目/行（多词空格分隔=任一命中即可）。大记忆量下的定向读取：优先用它精确定位（如传人名/项目名/时间词）",
+      },
+      unit: {
+        type: "string",
+        description: "可选。冷储原文单元文件名（episodic/ 下的 md，不含路径前缀，如 2023-05-03_session_summer.md）。读取该单元全文原文并复制到暖态（工作记忆激活）；不存在返回提示",
       },
       full: {
         type: "boolean",
         description: "true 返回完整内容（可能很长）；false 返回注入摘要，默认 false",
+      },
+      confidence: {
+        type: "array",
+        items: { type: "string", enum: ["high", "medium", "low", "wrong"] },
+        description: "可选。按置信度筛选（可多选）。high=用户直接说/已验证、medium=推断、low=存疑待验、wrong=已翻转。默认读全部（wrong 带【已翻转·勿引用】标记）；传本参数后只返回所选档位——[\"high\"] 只看已验证结论，[\"wrong\"] 只看被推翻的旧条目",
+      },
+      subject: {
+        type: "string",
+        description: "可选。按主体筛选（条目头 `@主体` 标记，如 owner / User_5）。子串匹配，只作用于暖态条目",
+      },
+      kinds: {
+        type: "array",
+        items: { type: "string", enum: ["event", "fact", "rule"] },
+        description: "可选。按类别筛选暖态条目（可多选）。注意与 kind 的区别：kind 是直读某个本体档案全文，kinds 是在暖态/综合视图内按类别筛",
       },
     },
     output: {
@@ -899,6 +996,35 @@ function apply(ctx, config) {
       const max = c.memory?.injectMaxChars ?? 6000;
       const useFull = args?.full === true;
       const ref = String(args?.ref ?? "").trim();
+      // v0.3.0：unit 精读冷储原文 + 复制暖态（工作记忆激活）
+      const unitName = String(args?.unit ?? "").trim();
+      if (unitName) {
+        const unitRaw = layout.readEpisodicUnit(unitName.replace(/\.md$/, ""));
+        if (!unitRaw.trim()) {
+          return { exists: false, bytes: 0, content: `冷储中不存在单元「${unitName}」。可用 linghun_graph_query 或 linghun_memory_status 查看单元列表。` };
+        }
+        const parsed = parseEpisodicUnit(unitRaw);
+        // 复制暖态：冷储不动，命中激活
+        const warmFile = layout.warmFile();
+        const warmCur = readCached(warmFile) ?? "";
+        const nextWarm = activateWarmUnit(warmCur, {
+          stamp: parsed.stamp || nowStamp(),
+          theme: parsed.theme,
+          subject: parsed.subjects?.[0],
+          unitFile: unitName.replace(/\.md$/, ""),
+          content: parsed.content,
+          conf: "high",
+        });
+        if (nextWarm !== warmCur) {
+          await ensureParent(warmFile);
+          await writeFile(warmFile, nextWarm, "utf8");
+          fileCache.delete(warmFile);
+        }
+        const out = useFull
+          ? `## 原文单元：${unitName}\n\n${parsed.content}`
+          : `## 原文单元：${unitName}${parsed.theme ? `（${parsed.theme}）` : ""}\n\n${parsed.content.slice(0, max)}\n${parsed.content.length > max ? `…(截断：单元原文 ${byteLen(parsed.content)} 字符)` : ""}`;
+        return { exists: true, bytes: byteLen(parsed.content), content: out };
+      }
       // 统一截断：提示模型最新条目已前置、可用 ref 定向过滤（v0.1.8）
       const clip = (text) => {
         const limit = useFull ? 50000 : max;
@@ -936,7 +1062,22 @@ function apply(ctx, config) {
       // 挤出截断窗口（0.1.8-alpha.1 实测发现的真 bug），定向读取必须全段过滤（v0.1.8）
       const cold = ref ? filterTextByRef(coldRaw, ref) : coldRaw;
       const warmEntries = parseWarm(layout.readWarm());
-      const kept = ref ? filterWarmByRef(warmEntries, ref) : warmEntries;
+      // 多维筛选（v0.4.6）：ref 关键词 ∩ 置信度 ∩ 主体 ∩ 类别，逐层收窄
+      let kept = ref ? filterWarmByRef(warmEntries, ref) : warmEntries;
+      const CONF_OK = ["high", "medium", "low", "wrong"];
+      const confFilter = Array.isArray(args?.confidence)
+        ? args.confidence.map((x) => String(x).trim().toLowerCase()).filter((x) => CONF_OK.includes(x))
+        : [];
+      if (confFilter.length) kept = kept.filter((e) => confFilter.includes(e.confidence));
+      const subjFilter = String(args?.subject ?? "").trim().toLowerCase();
+      if (subjFilter) kept = kept.filter((e) => String(e.subject ?? "").toLowerCase().includes(subjFilter));
+      const KIND_OK = ["event", "fact", "rule"];
+      const kindsFilter = Array.isArray(args?.kinds)
+        ? args.kinds.map((x) => String(x).trim().toLowerCase()).filter((x) => KIND_OK.includes(x))
+        : [];
+      if (kindsFilter.length) kept = kept.filter((e) => kindsFilter.includes(e.kind));
+      // 筛选条件给了却一条没剩：说清是筛空的，不伪装成「无记忆」
+      const filteredEmpty = !kept.length && (confFilter.length > 0 || !!subjFilter || kindsFilter.length > 0);
       // 暖态最新优先：写入序倒序渲染——大暖态被截断时砍最旧、保最新，编号 [n] 仍为文件序（v0.1.8）
       const warm = renderWarmEntries(sortWarmNewestFirst(kept), {
         numbered: true,
@@ -946,6 +1087,20 @@ function apply(ctx, config) {
       const parts = [];
       if (cold.trim()) parts.push(cold.trim());
       if (warm.trim()) parts.push(`## 近期记忆 / Recent\n\n${warm.trim()}`);
+      // v0.3.0：图谱相关单元（ref 命中主体/要素时，展示关联单元供精读）
+      let graphHits = [];
+      if (ref) {
+        const g = readGraph();
+        if (g) {
+          graphHits = queryGraph(g, ref, { limit: 5 });
+          if (graphHits.length) {
+            const unitRows = graphHits
+              .map((h) => `- ${h.file}${h.rels?.length ? `（${h.rels.join("；")}）` : ""}`)
+              .join("\n");
+            parts.push(`## 图谱关联单元 / Graph\n${unitRows}\n> 用 linghun_memory_read unit=<文件名> 精读原文。`);
+          }
+        }
+      }
       if (episodes.length) {
         let rows = episodes
           .map((e) => `- ${e.name}${e.title ? ` — ${e.title}` : ""}`)
@@ -956,6 +1111,20 @@ function apply(ctx, config) {
       if (team) parts.push(team);
       const full = parts.join("\n\n");
       if (!full.trim()) {
+        if (filteredEmpty) {
+          const f = [
+            confFilter.length ? `置信度=${confFilter.join("/")}` : "",
+            subjFilter ? `主体=${subjFilter}` : "",
+            kindsFilter.length ? `类别=${kindsFilter.join("/")}` : "",
+          ]
+            .filter(Boolean)
+            .join(" + ");
+          return {
+            exists: true,
+            bytes: 0,
+            content: `（暖态无满足「${f}」的条目。可用 linghun_memory_status 看整体分布，或去掉筛选条件重读）`,
+          };
+        }
         if (ref) return { exists: true, bytes: 0, content: `（海马体中无命中「${ref}」的条目）` };
         return { exists: false, bytes: 0, content: "" };
       }
@@ -964,7 +1133,169 @@ function apply(ctx, config) {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  regTool('linghun_unit_append', defineTool({
+    name: "linghun_unit_append",
+    description:
+      "把一段**原始对话原文**落成冷储记忆单元（episodic/<日期>_session_<主题>.md，一 session 一文件），原文一字不动；随后建图谱边：单元--mentions-->主体。\n\n这是 v0.3.0 记忆主写路径：记忆单元=原文，不做结构化加工（不拆 fact/event/rule、不写置信度摘要）。主体（subjects）指该段对话涉及的人（说话双方/被谈论的第三方），图谱据此把单元挂到主体轴上。\n\n若该段原文**印证/反驳**某画像要素，用 supports/contradicts 参数显式建边：传 linghun_profile_get 可见的画像要素内容片段（如「职业为金融分析师」），图谱生成 单元--supports-->画像要素 或 单元--contradicts-->画像要素。\n\n已存在的同名单元不覆盖（冷储原文不动档案）。",
+    parameters: {
+      stamp: { type: "string", description: "可选。单元时间戳（ISO，如 2023-05-03T14:00:00 或 2023-05-03）；缺省用当前时间。文件名以日期开头" },
+      theme: { type: "string", required: true, description: "单元主题（短词，如 summer_trip / job_search / andrew_promotion），用于文件名 slug 与索引" },
+      content: { type: "string", required: true, description: "该 session 的完整原始对话原文（说话人+文本，逐条保留，一字不改）" },
+      subjects: {
+        type: "array",
+        items: { type: "string" },
+        description: "可选。该单元涉及的主体名单（说话双方/被谈论者），如 [\"Caroline\", \"Melanie\"]。图谱据此建 单元--mentions-->主体 边",
+      },
+      supports: {
+        type: "array",
+        items: { type: "string" },
+        description: "可选。被本单元原文**印证**的画像要素内容片段列表（须与 linghun_profile_get 中的条目文本一致，如 \"职业为金融分析师\"）。图谱建 单元--supports-->画像要素 边",
+      },
+      contradicts: {
+        type: "array",
+        items: { type: "string" },
+        description: "可选。被本单元原文**反驳/更新**的画像要素内容片段列表。图谱建 单元--contradicts-->画像要素 边",
+      },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          created: { type: "boolean" },
+          file: { type: "string" },
+          bytes: { type: "integer" },
+          edges: { type: "integer" },
+        },
+      },
+      render: (_args, value) => [
+        {
+          type: "text",
+          text: value.created
+            ? `原文单元已落冷储：${value.file}（${value.bytes} 字节，建边 ${value.edges} 条）。`
+            : `单元已存在（冷储不动档案）：${value.file}（建边 ${value.edges} 条）。`,
+        },
+      ],
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const content = String(args.content ?? "").trim();
+      if (!content) throw new Error("linghun_unit_append: `content` 不能为空");
+      const theme = String(args.theme ?? "").trim();
+      if (!theme) throw new Error("linghun_unit_append: `theme` 不能为空");
+      const subjects = Array.isArray(args.subjects) ? args.subjects.map((s) => String(s).trim()).filter(Boolean) : [];
+      const stamp = String(args.stamp ?? "").trim() || nowStamp();
+      const unit = { stamp, theme, subjects, content };
+      const res = layout.appendEpisodicUnit(unit);
+      if (!res) return { created: false, file: "", bytes: 0, edges: 0 };
+      const file = res.name;
+      // 建边：U--mentions-->S
+      let edges = 0;
+      const seenS = new Set();
+      for (const s of subjects) {
+        const key = normalizeSubject(s);
+        if (seenS.has(key) || !key) continue;
+        seenS.add(key);
+        await appendGraphHint(unitNodeId(file), "mentions", subjectNodeId(s));
+        edges++;
+      }
+      // 建边：U--supports/contradicts-->P（画像要素按文本定位）
+      const profiles = layout.listProfiles();
+      const byText = new Map();
+      for (const p of profiles) {
+        const slots = p.slots ?? {};
+        for (const slot of Object.keys(slots)) {
+          (slots[slot] ?? []).forEach((it, i) => {
+            byText.set(normalizeForMatch(String(it?.text ?? "")), profileNodeId(p.subject, slot, i));
+          });
+        }
+      }
+      const linkByText = async (items, rel) => {
+        for (const item of Array.isArray(items) ? items : []) {
+          const t = String(item ?? "").trim();
+          if (!t) continue;
+          const key = normalizeForMatch(t);
+          const pId = byText.get(key) || [...byText.keys()].find((k) => k.includes(normalizeForMatch(t)) || normalizeForMatch(t).includes(k));
+          if (pId) {
+            await appendGraphHint(unitNodeId(file), rel, pId);
+            edges++;
+          }
+        }
+      };
+      await linkByText(args.supports, "supports");
+      await linkByText(args.contradicts, "contradicts");
+      return { created: res.created, file, bytes: byteLen(content), edges };
+    },
+    presentCall: (args) => ({ card: "generic", title: "冷储·原文单元", kind: "other", rawInput: args }),
+  }));
+
+  regTool('linghun_graph_build', defineTool({
+    name: "linghun_graph_build",
+    description:
+      "全量重建记忆图谱（幂等，可随时重跑）：扫描冷储单元（episodic/）+ 人物画像（profiles/）+ 边线索（graph/hints.json），重建 graph.md + graph.json。\n\n图谱把记忆单元与人物画像要素连起来：单元--mentions-->主体、主体--has_profile-->画像要素、单元--supports/contradicts-->画像要素。重建不会改动冷储原文。写完返回图谱速览。",
+    parameters: {},
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          summary: { type: "string" },
+        },
+      },
+      render: (_args, value) => [
+        { type: "text", text: value.ok ? `记忆图谱已重建：\n${value.summary}` : "图谱重建失败。" },
+      ],
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const g = await buildGraphFromFiles();
+      if (!g) return { ok: false, summary: "" };
+      return { ok: true, summary: renderGraphIndex(g, { maxChars: 600 }) };
+    },
+    presentCall: (_args) => ({ card: "generic", title: "图谱·重建", kind: "other", rawInput: {} }),
+  }));
+
+  regTool('linghun_graph_query', defineTool({
+    name: "linghun_graph_query",
+    description:
+      "图谱查询：输入主体名（如 Caroline / Andrew）或画像要素关键词，返回**关联的冷储原文单元**列表（含 关联关系与边类型）。图谱是联想网络——从主体/要素出发找最相关的单元，再用 linghun_memory_read unit=<文件名> 精读原文。\n\n典型用法：问「Andrew 的职业」→ graph_query Andrew → 得到 mentions/supports 边关联的单元 → memory_read unit=... 读原文确认。",
+    parameters: {
+      query: { type: "string", required: true, description: "主体名或画像要素关键词（如 Andrew / 职业 / summer trip）" },
+      limit: { type: "integer", description: "返回单元数上限，默认 20" },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          content: { type: "string" },
+        },
+      },
+      render: (_args, value) => [
+        { type: "text", text: value.ok ? value.content : "图谱查询失败。" },
+      ],
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const query = String(args.query ?? "").trim();
+      if (!query) return { ok: false, content: "query 不能为空" };
+      const g = readGraph();
+      if (!g) return { ok: false, content: "图谱尚未建立，先执行 linghun_graph_build。" };
+      const hits = queryGraph(g, query, { limit: args.limit });
+      if (!hits.length) {
+        return { ok: true, content: `图谱中无命中「${query}」的单元。可用 linghun_graph_build 重建或用 linghun_memory_read ref=${query} 关键词检索。` };
+      }
+      const rows = hits
+        .map((h, i) => `- ${i + 1}. ${h.file}${h.rels?.length ? `（${h.rels.join("；")}）` : ""}`)
+        .join("\n");
+      return { ok: true, content: `图谱命中「${query}」相关单元 ${hits.length} 个：\n${rows}\n> 用 linghun_memory_read unit=<文件名> 精读原文。` };
+    },
+    presentCall: (args) => ({ card: "generic", title: "图谱·查询", kind: "other", rawInput: args }),
+  }));
+
+  regTool('linghun_memory_journal_read', defineTool({
     name: "linghun_memory_journal_read",
     description:
       "读取序时账（journal）：原始对话流水，按发生时间（精确到秒）归档、全量不筛选。不传 date 返回所有天的索引（日期 + 条数）；传 date（YYYY-MM-DD）返回该天完整流水。传 start/end（YYYY-MM-DD HH:MM:SS，精确到秒）可**按任务时间范围精确检索**：只返回该时间窗口内的流水条目，避免翻整日全量（单日流水过大时框架会截断中间段，务必用时间范围收窄）。start/end 可跨天，二者至少传一个即可。用于追溯'当时到底说了什么'——序时账与暖态/冷储互补：warm 是遗忘梯度的近期摘要，journal 是完整原始记录。",
@@ -1048,7 +1379,7 @@ function apply(ctx, config) {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  regTool('linghun_memory_touch', defineTool({
     name: "linghun_memory_touch",
     description:
       "标记暖态记忆为「刚刚被用到」：传入该条记忆内容中的一段文字（ref），匹配到的条目 last_access 刷新为当前时间。读≠用——linghun_memory_read 读到的条目，只有实际派上用场的才 touch，这是吃灰管理的关键动作：一直不被用到的记忆会沉底、被挤出注入。",
@@ -1086,7 +1417,7 @@ function apply(ctx, config) {
     presentCall: (args) => ({ card: "generic", title: "海马体·标记活跃", kind: "other", rawInput: args }),
   }));
 
-  ctx.tools.register(defineTool({
+  regTool('linghun_memory_consolidate', defineTool({
     name: "linghun_memory_consolidate",
     description:
       "海马体沉淀：把暖态工位（warm.md）的近期记忆归档进 episodic/<日期>.md，并合并进冷储摘要（cold.md），然后清空暖态。相当于「判断→被判定→反馈→机制化」循环里的归档动作。",
@@ -1110,7 +1441,7 @@ function apply(ctx, config) {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  regTool('linghun_memory_project', defineTool({
     name: "linghun_memory_project",
     description:
       "记忆本体投影（BEAM 验证机制）：把暖态工位（warm.md）按主题桶 LLM 聚合成本体投影（ontology.md）——同主题条目合并为主题节点，保留时间锚点/数字/版本/结论。供记忆提取子智能体（linghun-assembler）检索时「本体主题索引优先 + BM25 兜底」，替代纯 BM25 的分散命中。适合在 warm 条目多、问题常跨主题时执行；本体文件可在多次投影间累积（每次用当前暖态重投影）。",
@@ -1145,7 +1476,7 @@ function apply(ctx, config) {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  regTool('linghun_memory_rules', defineTool({
     name: "linghun_memory_rules",
     description:
       "规则本体沉淀（BEAM 三本体方案·规则本体）：把一条可复用的总结经验追加进规则本体 rules.md（## 主题 节点下追加 - 规则行），供记忆提取子智能体（linghun-assembler）检索时 R_ALIAS 规则别名命中注入。规则是长期稳定的经验（如「矛盾不硬裁」「先查证再下结论」「记忆注入是素材不替代判定」），不是一次性事实——适合在实践得出可复用结论后调用；同主题规则自动聚合在同一节点下。\n\n签名分桶（v0.1.0）：topic 传签名格式 `[题型域|子题型|工具|错误码] 中文名`（如 `[推理题|矛盾辨析|无|无] 矛盾处置`）时，写入 `### 桶` 签名桶块——把「题型的抽象关系结构」工程化为签名桶，同签名自动聚合；普通主题维持旧节点格式，两者可共存。",
@@ -1181,8 +1512,103 @@ function apply(ctx, config) {
     },
   }));
 
+  // ── 本体装配（DSH 本体分工定案：存储合并资源池 memory 管、使用归 linghun 收口者）────
+  regTool('linghun_ontology_assemble', defineTool({
+    name: "linghun_ontology_assemble",
+    description:
+      "本体装配（收口者的上下文工程）：读取本体资源池（知识本体 knowledge_ontology.md + 规则本体 rules.md 合并存管、只读索引），按 query 命中主题/桶，装配本轮所需的 知识+规则 素材块。ask 前调用，把命中本体注入上下文作为收口判断的上下文素材（不是判定本身）：知识本体=精确值（回答「是什么/多少」），规则本体=行为纪律（回答「该怎么做」）。同主题/签名桶自动聚合；未命中时返回资源池索引供定位。query 留空仅返回资源池索引。",
+    parameters: {
+      query: {
+        type: "string",
+        description: "本轮任务/问题描述，用于命中知识本体主题与规则本体桶/节点（如「悖论处置」「评测纪律」「m401 评测」）；留空返回资源池索引",
+      },
+      maxHits: {
+        type: "number",
+        description: "每个分区最多返回的命中块数，默认 3",
+      },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          section: { type: "string" },
+          hits: { type: "array", items: { type: "string" } },
+          text: { type: "string" },
+          total: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              knowledge: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  file: { type: "string" },
+                  themes: { type: "array", items: { type: "string" } },
+                  entries: { type: "number" },
+                },
+              },
+              rules: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  file: { type: "string" },
+                  themes: { type: "array", items: { type: "string" } },
+                  entries: { type: "number" },
+                },
+              },
+            },
+          },
+          reason: { type: "string" },
+        },
+      },
+      render: (_args, value) => [
+        { type: "text", text: value.ok ? `本体装配完成：${value.section}${value.hits.length ? `（命中 ${value.hits.length} 块）` : "（无命中，返回资源池索引）"}` : `本体装配失败：${value.reason ?? "未知原因"}` },
+      ],
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const q = String(args?.query ?? "").trim();
+      const maxHits = Math.max(1, Math.floor(Number(args?.maxHits) || 3));
+      const total = layout.listOntologyPool();
+      if (!q) return { ok: true, section: "none", hits: [], text: "", total };
+      try {
+        // query 分词（空白/标点切，取长度 >=2 的词）
+        const words = q.split(/[\s,，。;；:：、|/]+/).filter((w) => w.length >= 2);
+        const hitWords = (text) => words.some((w) => text.includes(w));
+        const parts = [];
+        const hits = [];
+        // 知识本体：按 ## 主题块切分，块头命中 → 整块装配
+        const ontK = layout.readKnowledgeOntology();
+        const kBlocks = String(ontK ?? "").split(/^(?=##\s)/m).filter((b) => b.trim());
+        const kHit = kBlocks.filter((b) => hitWords((b.split("\n", 1)[0] ?? "") + "\n" + b)).slice(0, maxHits);
+        if (kHit.length) {
+          hits.push(...kHit.map((b) => `knowledge:${(b.split("\n", 1)[0] ?? "").trim()}`));
+          parts.push(`## 知识本体命中 / Knowledge\n${kHit.join("\n\n").trim()}`);
+        }
+        // 规则本体：parseRulesBuckets 解析桶/节点，桶名或桶体命中 → 装配
+        const rulesPath = join(memoryDir(), "rules.md");
+        const rulesText = readCached(rulesPath);
+        let rHit = [];
+        if (rulesText) {
+          const rBuckets = parseRulesBuckets(rulesText);
+          rHit = rBuckets.filter((b) => hitWords(`${b.name} ${b.header} ${b.body}`)).slice(0, maxHits);
+          if (rHit.length) {
+            hits.push(...rHit.map((b) => `rules:${b.name}`));
+            parts.push(`## 规则本体命中 / Rules\n${rHit.map((b) => `${b.header}\n${b.body}`.trim()).join("\n\n")}`);
+          }
+        }
+        const section = kHit.length && rHit.length ? "both" : kHit.length ? "knowledge" : rHit.length ? "rules" : "none";
+        return { ok: true, section, hits, text: parts.join("\n\n"), total };
+      } catch (err) {
+        return { ok: false, section: "none", hits: [], text: "", total, reason: String(err?.message ?? err) };
+      }
+    },
+  }));
+
   // ── 目标系统：get（残差触发检索）/ update（写侧信号合并）/ state（状态查询）────
-  ctx.tools.register(defineTool({
+  regTool('linghun_goal_get', defineTool({
     name: "linghun_goal_get",
     description:
       "目标主线处境触发检索：把当前处境（对话消息/情景）与目标档案做残差触发打分（触发分 = 相似度 + 目标激活分），返回按触发分降序的目标清单。目标=记忆的骨架（要达成什么+为什么）；goal/value 类联想是纯相似度的盲区——本工具用「目标激活」补上。命中目标主线时把它作为最高优先参考（温和注入，可用参考，不强制改写回答）。",
@@ -1263,7 +1689,7 @@ function apply(ctx, config) {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  regTool('linghun_goal_update', defineTool({
     name: "linghun_goal_update",
     description:
       "写侧目标信号合并：把对话中出现的目标信号（新目标/推进/调整/达成/放弃）合并进目标档案（$DSH_HOME/linghun/goals/goals.json）。目标系统=真实前瞻记忆：写时不预判未来会被问什么，只沉淀「这个人要达成什么」。同 speaker 同主题（domain 相同或表述相似）自动合并、不重复建档。action：new（新目标）/ progress（推进，追加 detail）/ change（调整 statement/domain/priority）/ achieve（达成）/ abandon（放弃）。triggers 为可选 Bridge 触发词（1-2 条「什么处境会激活这个目标」的语义远距桥，英文原文，如 college fund 目标 → \"reconsidering long-term financial plans after a family trip\"），只给 high/medium 目标、每条 3-8 词、不穷举未来提问。",
@@ -1341,7 +1767,7 @@ function apply(ctx, config) {
     },
   }));
 
-  ctx.tools.register(defineTool({
+  regTool('linghun_goal_state', defineTool({
     name: "linghun_goal_state",
     description:
       "目标档案状态查询：返回当前全部目标及状态机统计（active/paused/achieved/abandoned 数量）。用于回顾目标主线、核对状态机是否随对话更新。",
@@ -1396,6 +1822,116 @@ function apply(ctx, config) {
       for (const g of goals) byState[g.state ?? "unknown"] = (byState[g.state ?? "unknown"] ?? 0) + 1;
       return { ok: true, total: goals.length, byState, goals };
     },
+  }));
+
+  // ── 人物画像层（v0.2.1）：画像=记忆的第一索引键（主体轴）────────────────
+  regTool('linghun_profile_update', defineTool({
+    name: "linghun_profile_update",
+    description:
+      "向指定主体的画像槽位写入/更新一条要点。画像按主体分家（owner=你 / assistant=我 / 第三方=他），是记忆的第一索引键；六槽：fact（是什么）/ state（在忙什么）/ goal（想要什么）/ value（底线）/ causal（来龙去脉）/ preference（偏好）。\n\n每条记忆都该有归属主体（谁说的/关于谁/对谁说的）；画像由系统自动沉淀，模型读到新事实后用本工具更新对应槽位，不要整段改写档案。更新（update）：传 linghun_profile_get 返回的条目内容片段，命中后旧条目标注已更新，新要点另起一条。",
+    parameters: {
+      subject: { type: "string", required: true, description: "主体（画像主键）：owner / assistant / 第三方名字" },
+      slot: {
+        type: "string",
+        enum: ["fact", "state", "goal", "value", "causal", "preference"],
+        description: "画像槽位：fact（是什么）/ state（在忙什么）/ goal（想要什么）/ value（底线）/ causal（来龙去脉）/ preference（偏好）",
+      },
+      content: { type: "string", required: true, description: "要点内容（一句话，精炼）" },
+      confidence: {
+        type: "string",
+        enum: ["high", "medium", "low"],
+        description: "置信度：high（用户直接说/已验证）/ medium（推断，默认）/ low（存疑/猜测/过期待验）",
+      },
+      update: {
+        type: "string",
+        description: "可选。要更新的旧要点内容片段：命中后旧条目标注 ⚠️ 已更新，新要点另起一条",
+      },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          subject: { type: "string" },
+          slot: { type: "string" },
+          mode: { type: "string" },
+        },
+      },
+      render: (_args, value) => [
+        {
+          type: "text",
+          text: value.ok
+            ? `画像「${value.subject}」· ${value.slot} 已更新（${value.mode}）。`
+            : `画像更新失败。`,
+        },
+      ],
+    },
+    isConcurrencySafe: () => false,
+    async execute(args, exec) {
+      const subject = String(args.subject ?? "").trim();
+      if (!subject) throw new Error("linghun_profile_update: `subject` 不能为空");
+      const slot = String(args.slot ?? "").trim() || "fact";
+      const content = String(args.content ?? "").trim();
+      if (!content) throw new Error("linghun_profile_update: `content` 不能为空");
+      const confidence = ["high", "medium", "low"].includes(args.confidence) ? args.confidence : "medium";
+      const update = String(args.update ?? "").trim() || undefined;
+      const stamp = nowStamp();
+      const file = layout.profilesDir() + `/${normalizeSubject(subject)}.md`;
+      const current = readCached(file) ?? "";
+      const next = upsertProfileSlotText(current, slot, `[${confidence}] ${content}`, update, stamp);
+      if (next === null) throw new Error("linghun_profile_update: content 为空");
+      await ensureParent(file);
+      await writeFile(file, next, "utf8");
+      fileCache.delete(file);
+      return { ok: true, subject: normalizeSubject(subject), slot, mode: "upsert" };
+    },
+    presentCall: (args) => ({ card: "generic", title: "画像·沉淀", kind: "other", rawInput: args }),
+  }));
+
+  regTool('linghun_profile_get', defineTool({
+    name: "linghun_profile_get",
+    description:
+      "读指定主体的画像（六槽全文或指定槽）。**画像=路标**：只提供身份/状态/价值观等定位线索，不是答案本身。要事件细节、原话、时间线，必须继续 linghun_graph_query <主体> 定位原文单元 → linghun_memory_read unit=<单元文件> 精读原文确认；画像条目带 (session N) 标注的，直接读对应单元。禁止把画像条目当答案直接引用。",
+    parameters: {
+      subject: { type: "string", required: true, description: "主体（画像主键）：owner / assistant / 第三方名字" },
+      slots: {
+        type: "array",
+        items: { type: "string" },
+        description: "可选。要读的槽位子集（默认全部六槽）：fact/state/goal/value/causal/preference",
+      },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          subject: { type: "string" },
+          text: { type: "string" },
+          slots: { type: "array", items: { type: "string" } },
+        },
+      },
+      render: (_args, value) => [
+        {
+          type: "text",
+          text: value.text || `画像「${value.subject}」暂无内容，可用 linghun_profile_update 沉淀。`,
+        },
+      ],
+    },
+    isConcurrencySafe: () => true,
+    async execute(args, exec) {
+      const subject = String(args.subject ?? "").trim();
+      if (!subject) throw new Error("linghun_profile_get: `subject` 不能为空");
+      const file = layout.profilesDir() + `/${normalizeSubject(subject)}.md`;
+      const current = readCached(file) ?? "";
+      const profile = parseProfiles(current) ?? { subject: normalizeSubject(subject), summary: "", slots: {} };
+      const slots = Array.isArray(args.slots) ? args.slots.map((s) => String(s)) : undefined;
+      const text = renderProfileFull(profile, { slots });
+      const guide =
+        "\n\n> 画像=路标：以上只是定位线索。要事件细节/原话/时间线：① linghun_graph_query <主体名> 定位相关原文单元 → ② linghun_memory_read unit=<单元文件> 精读原文确认。画像条目带 (session N) 的直接读对应单元。不要把画像条目当答案直接引用。";
+      return { subject: normalizeSubject(subject), text: text + guide, slots: slots ?? PROFILE_SLOTS };
+    },
+    presentCall: (args) => ({ card: "generic", title: "画像·读取", kind: "other", rawInput: args }),
   }));
 
   // ── 收尾评估：每轮对话结束由工程强制触发「有没有值得沉淀」──────────────
@@ -1519,76 +2055,479 @@ function apply(ctx, config) {
     void runAssessment(session);
   });
 
-  // ── 灵魂：读 / 更新自己的灵魂卡（自进化）────────────────────────────────
-  ctx.tools.register(defineTool({
-    name: "linghun_soul_read",
+  const firstLine = (text, cap) => {
+    const lines = String(text ?? "")
+      .split(/\r?\n/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    // 跳过 markdown 标题行（## 块头），取正文首行作为摘要；无正文时退回首行
+    const line = lines.find((l) => !l.startsWith("#")) ?? lines[0] ?? "";
+    return line.length > cap ? `${line.slice(0, cap)}…` : line;
+  };
+  /** 收集 probe 候选池：暖态条目 + 冷储块 + 三本体档案块 + 规则行。 */
+  const collectProbeCandidates = () => {
+    const c = cfg();
+    const out = [];
+    for (const e of parseWarm(layout.readWarm())) {
+      out.push({
+        block: e.block,
+        source: "warm",
+        anchor: `[${(typeof e.idx === "number" ? e.idx : 0) + 1}]`,
+        lastAccess: e.lastAccess ?? "",
+        confidence: e.confidence,
+        kind: e.kind,
+      });
+    }
+    for (const b of layout.readCold().split(/\n(?=## )/).map((x) => x.trim()).filter(Boolean)) {
+      out.push({ block: b, source: "cold", anchor: firstLine(b, 60), lastAccess: "", confidence: "", kind: "" });
+    }
+    for (const [source, raw] of [
+      ["fact", layout.readKnowledgeOntology()],
+      ["event", layout.readMemoryOntology()],
+    ]) {
+      for (const b of raw.split(/\n(?=## )/).map((x) => x.trim()).filter(Boolean)) {
+        out.push({ block: b, source, anchor: firstLine(b, 60), lastAccess: "", confidence: "", kind: source });
+      }
+    }
+    const rulesPath =
+      (c.memory?.rules?.path ?? "").trim() ||
+      join(resolveDshHome(), "linghun", "memory", "rules.md");
+    let rulesText = "";
+    try {
+      rulesText = readFileSync(rulesPath, "utf8");
+    } catch {
+      /* 无规则文件则跳过 */
+    }
+    for (const line of rulesText.split(/\r?\n/).map((x) => x.trim()).filter(Boolean)) {
+      out.push({ block: line, source: "rule", anchor: firstLine(line, 60), lastAccess: "", confidence: "", kind: "rule" });
+    }
+    return out;
+  };
+
+  regTool('linghun_retrieval_probe', defineTool({
+    name: "linghun_retrieval_probe",
     description:
-      "读取自己的灵魂卡（身份锚点 + 判断纪律）。当你需要回顾「我是谁、我的边界、我的纪律」时使用。",
+      "主动检索记忆候选（ACC 核心工具）：对暖态/冷储/三本体档案（知识/事件/规则）做 BM25 打分检索，返回候选列表（来源/锚点/分数/摘要），不注入正文。模型据此挑 1-3 条用 linghun_memory_read 精读——检索决定权在模型，不在自动注入。",
+    parameters: {
+      query: {
+        type: "string",
+        required: true,
+        description: "检索意图（描述要找什么，如'用户偏好什么沟通风格'），支持换词面",
+      },
+      ref: {
+        type: "string",
+        description: "可选。定向关键词（多词空格分隔=任一命中，大小写不限）；传专名/项目名/时间词可精确过滤候选",
+      },
+      top_k: {
+        type: "number",
+        description: "返回候选数，默认 8，上限 20",
+      },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          query: { type: "string" },
+          total_candidates: { type: "number" },
+          results: {
+            type: "array",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                rank: { type: "number" },
+                source: { type: "string" },
+                anchor: { type: "string" },
+                title: { type: "string" },
+                score: { type: "number" },
+                confidence: { type: "string" },
+                last_access: { type: "string" },
+                read_hint: { type: "string" },
+              },
+            },
+          },
+        },
+      },
+      render: (_args, value) => {
+        if (!value.ok) return [{ type: "text", text: "候选检索未执行（disabled）。" }];
+        if (!value.results?.length) {
+          return [{ type: "text", text: `候选检索无命中：${value.query}（候选池 ${value.total_candidates} 条）` }];
+        }
+        const lines = [`候选检索：${value.query}（候选池 ${value.total_candidates} 条，返回 ${value.results.length}）`];
+        for (const r of value.results) {
+          lines.push(`${r.rank}. [${r.source}${r.anchor ? ` ${r.anchor}` : ""}] ${r.title}${r.confidence === "low" ? " 【低置信】" : ""}（score ${typeof r.score === "number" ? r.score.toFixed(2) : r.score}）`);
+          if (r.last_access) lines.push(`   最后访问 ${r.last_access}`);
+          lines.push(`   精读：${r.read_hint}`);
+        }
+        return [{ type: "text", text: lines.join("\n") }];
+      },
+    },
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      const c = cfg();
+      const query = String(args?.query ?? "").trim();
+      if (!query) throw new Error("linghun_retrieval_probe: `query` 不能为空");
+      const ref = String(args?.ref ?? "").trim();
+      let topK = Number(args?.top_k ?? c.memory?.acc?.probeTopK ?? 8) || 8;
+      topK = Math.min(Math.max(1, Math.floor(topK)), 20);
+      const candidates = collectProbeCandidates().filter((x) => !ref || matchRef(x.block, ref));
+      if (!candidates.length) return { ok: true, query, total_candidates: 0, results: [] };
+      const stats = buildBm25Stats(candidates.map((x) => tokenizeForSim(x.block)));
+      const hits = bm25Retrieve(candidates, query, stats, { topk: topK });
+      const results = hits.map((h, i) => {
+        const x = candidates[h.idx];
+        return {
+          rank: i + 1,
+          source: x.source,
+          anchor: x.anchor,
+          title: firstLine(x.block, 100),
+          score: Number(Number(h.score).toFixed(4)),
+          confidence: x.confidence || "",
+          last_access: x.lastAccess || "",
+          read_hint:
+            x.source === "warm"
+              ? `linghun_memory_read ref=${x.anchor}（或传专名）`
+              : `linghun_memory_read kind=${x.kind || (x.source === "fact" ? "fact" : x.source === "event" ? "event" : "rule")}${x.anchor ? ` ref="${x.anchor}"` : ""}`,
+        };
+      });
+      return { ok: true, query, total_candidates: candidates.length, results };
+    },
+  }));
+
+  /** CJK 判定（linghun_math_analyze op=text 用） */
+  function isCjkCodePoint(cp) {
+    return (cp >= 0x3400 && cp <= 0x4dbf) || (cp >= 0x4e00 && cp <= 0x9fff) || (cp >= 0xf900 && cp <= 0xfaff);
+  }
+
+  /** 文本精确统计（linghun_math_analyze op=text 用）：字符/字节/行/词/CJK/空白/估算 token */
+  function computeTextStats(text) {
+    const s = String(text ?? "");
+    const chars = [...s].length;
+    const bytes = Buffer.byteLength(s, "utf8");
+    const lines = s.length === 0 ? 0 : s.split(/\r?\n/).length;
+    const nonEmptyLines = s.split(/\r?\n/).filter((l) => l.trim().length > 0).length;
+    const words = s.trim() ? s.trim().split(/\s+/).length : 0;
+    let cjk = 0, whitespace = 0, nonAscii = 0, tokens = 0;
+    for (const ch of s) {
+      const cp = ch.codePointAt(0);
+      if (/\s/.test(ch)) whitespace += 1;
+      else if (isCjkCodePoint(cp)) cjk += 1;
+      if (cp >= 0x80) nonAscii += 1;
+      tokens += isCjkCodePoint(cp) ? 0.6 : 0.25;
+    }
+    return {
+      characters: chars,
+      charactersNoWhitespace: chars - whitespace,
+      bytes,
+      lines,
+      nonEmptyLines,
+      words,
+      cjkCharacters: cjk,
+      whitespace,
+      nonAsciiCharacters: nonAscii,
+      estimatedTokens: Math.ceil(tokens),
+    };
+  }
+
+  /** 写侧相对时间锚定（v0.4.3）：把文本里的相对时间表达就地标成绝对日期，形态 `原文 [=YYYY-MM-DD]`。
+   *  只追加标注、不改写原文；已带 `[=...]` 的跳过。
+   *  锚点 = 条目写入时刻的日期，写入即固定、之后不再变动。
+   *  注意：只锚定「哪一天」这类不变量；「相隔多少天」是相对量（随"现在"漂移），不在写侧存，读侧用
+   *  linghun_math_analyze op=date 现算。 */
+  function anchorRelativeDatesInText(text, anchorDate) {
+    const src = String(text ?? "");
+    if (!src) return src;
+    const anchor = String(anchorDate ?? "").slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(anchor)) return src;
+    const REL = /\b(?:today|tonight|tomorrow|yesterday|end of (?:the )?day|end of (?:the )?week|next month|this week|next week|in \d+ (?:day|days|week|weeks)|eod(?:\s+(?:today|tonight|tomorrow))?|(?:by|on|before|after|next|this)\s+(?:eod\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday))\b/gi;
+    return src.replace(REL, (m, offset, whole) => {
+      const tail = whole.slice(offset + m.length, offset + m.length + 16);
+      if (/^\s*\[=\d{4}-\d{2}-\d{2}\]/.test(tail)) return m;
+      try {
+        const r = resolveRelativeDate(anchor, m);
+        if (!r || !r.ok || !r.result || !r.result.resolved) return m;
+        return `${m} [=${r.result.resolved}]`;
+      } catch {
+        return m;
+      }
+    });
+  }
+
+  /** 相对日期换算（linghun_math_analyze op=relative 用）：锚点日期 + 相对表达 -> 绝对日期（确定性，勿心算） */
+  function resolveRelativeDate(anchor, expr) {
+    const m = String(expr || "").toLowerCase();
+    const a = new Date(String(anchor).slice(0, 10) + "T00:00:00Z");
+    if (Number.isNaN(a.getTime())) throw new Error(`linghun_math_analyze: 锚点日期格式应为 YYYY-MM-DD，收到 "${anchor}"`);
+    const iso = (dt) => dt.toISOString().slice(0, 10);
+    const add = (n) => { const d = new Date(a.getTime() + n * 86400000); return iso(d); };
+    const wdMap = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6,
+      sun: 0, mon: 1, tue: 2, tues: 2, wed: 3, thu: 4, thur: 4, thurs: 4, fri: 5, sat: 6 };
+    const deadline = /deadline|due|by\s|expected to complete|complete by|submit by|finish by|confirm by|no later than|target date|must (be\s+)?completed/.test(m);
+    const nextWd = (wd, plusWeek) => add(((wd - a.getUTCDay()) % 7 + 7) % 7 + (plusWeek ? 7 : 0));
+    let out = null, matched = "";
+    if (/\b(eod|end\s+of\s+day|eob|end\s+of\s+business|close\s+of\s+business)\b/.test(m)) {
+      const mm = m.match(/\b(eod|end\s+of\s+day|eob|end\s+of\s+business|close\s+of\s+business)[,\s]*(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/);
+      if (mm) { out = nextWd(wdMap[mm[2]], false); matched = mm[0]; }
+      else { out = add(0); matched = "eod"; }
+    }
+    else if (/\btoday\b/.test(m)) { out = add(0); matched = "today"; }
+    else if (/\btomorrow\b/.test(m)) { out = add(1); matched = "tomorrow"; }
+    else if (/\byesterday\b/.test(m)) { out = add(-1); matched = "yesterday"; }
+    else if (/\bin\s+(\d+)\s+(day|days|week|weeks)\b/.test(m)) {
+      const mm = m.match(/\bin\s+(\d+)\s+(day|days|week|weeks)\b/);
+      const n = Number(mm[1]); const dlt = /^week/.test(mm[2]) ? n * 7 : n;
+      out = add(dlt); matched = mm[0];
+    }
+    else if (/\bnext\s+week\b/.test(m)) { out = nextWd(5, true); matched = "next week"; }
+    else if (/\bthis\s+week\b/.test(m)) { out = nextWd(5, false); matched = "this week"; }
+    else if (/\b(end\s+of\s+(?:this\s+)?week|eow)\b/.test(m)) { out = nextWd(5, false); matched = "end of week"; }
+    else if (/\bnext\s+month\b/.test(m)) {
+      const y = a.getUTCFullYear(), mo = a.getUTCMonth() + 1;
+      out = iso(new Date(Date.UTC(mo === 12 ? y + 1 : y, mo === 12 ? 0 : mo, 1)));
+      matched = "next month";
+    }
+    else {
+      const mm = m.match(/\b(next|this|by|on|before|after)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)\b/);
+      if (mm) {
+        const wd = wdMap[mm[2]];
+        out = mm[1] === "next" ? nextWd(wd, true) : nextWd(wd, false);
+        matched = mm[0];
+      }
+    }
+    if (!out) return { ok: false, error: `无法识别相对日期表达："${expr}"（支持 today/tomorrow/yesterday/in N days|weeks/next|this week/next|this|by|on|before|after + 星期/end of week/next month）` };
+    return { ok: true, result: { expr: matched, anchor: iso(a), resolved: out, deadline } };
+  }
+
+  regTool('linghun_math_analyze', defineTool({
+    name: "linghun_math_analyze",
+    description:
+      "数学/时间/文本分析工具（ACC）：检索到数值证据后用它算，别硬算、别目测。op 选一：calc=表达式求值（四则/百分号/括号）；date=日期间隔或先后（传两个日期）；relative=相对日期换算（传 anchor 锚点日期 YYYY-MM-DD + expr 相对表达如 by Friday/in 3 days/end of week/next month，按锚点确定性换算成绝对日期）；aggregate=数值列表求和/均值/最值/计数；compare=数值比较返回最大最小与差值；text=文本精确统计（字符/字节/行/词/CJK/空白/估算 token，判「字数超限」「篇幅」类规则时必用）。",
+    parameters: {
+      op: {
+        type: "string",
+        required: true,
+        description: "calc | date | relative | aggregate | compare | text",
+      },
+      expr: {
+        type: "string",
+        description: "calc 传表达式（如 12*7+3，支持 + - * / % 括号）；date 传 'A 到 B'（日期格式 YYYY-MM-DD）或 'A vs B'；relative 传相对日期表达（by Friday / in 3 days / end of week / next month / tomorrow 等）",
+      },
+      anchor: {
+        type: "string",
+        description: "relative 传消息锚点日期（YYYY-MM-DD，即该消息发布当天），相对日期按它换算",
+      },
+      values: {
+        type: "array",
+        description: "aggregate 传数值数组；compare 传 {label, value} 数组",
+      },
+      text: {
+        type: "string",
+        description: "text 传要统计的原文（原样传入，不要截断、不要自己数）",
+      },
+    },
+    output: {
+      schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          ok: { type: "boolean" },
+          op: { type: "string" },
+          result: { type: "json" },
+        },
+      },
+      render: (_args, value) => {
+        if (!value.ok) return [{ type: "text", text: `数学分析失败：${value.error || "未知"}` }];
+        return [{ type: "text", text: `数学分析（${value.op}）：${JSON.stringify(value.result)}` }];
+      },
+    },
+    isConcurrencySafe: () => true,
+    async execute(args) {
+      const op = String(args?.op ?? "").trim();
+      if (!["calc", "date", "relative", "aggregate", "compare", "text"].includes(op)) throw new Error(`linghun_math_analyze: op 必须是 calc|date|relative|aggregate|compare|text，收到 "${op}"`);
+      if (op === "text") {
+        const raw = args?.text;
+        if (typeof raw !== "string" || raw.length === 0) throw new Error("linghun_math_analyze: text 需要 text（要统计的原文，原样传入不要截断）");
+        return { ok: true, op, result: computeTextStats(raw) };
+      }
+      if (op === "relative") {
+        const expr = String(args?.expr ?? "").trim();
+        const anchor = String(args?.anchor ?? "").trim();
+        if (!expr || !anchor) throw new Error("linghun_math_analyze: relative 需要 expr（相对日期表达）和 anchor（消息锚点日期 YYYY-MM-DD）");
+        return resolveRelativeDate(anchor, expr);
+      }
+      if (op === "calc") {
+        const expr = String(args?.expr ?? "").trim();
+        if (!expr) throw new Error("linghun_math_analyze: calc 需要 expr");
+        if (!/^[0-9+\-*/().%\s]+$/.test(expr)) throw new Error(`linghun_math_analyze: 表达式含非法字符 "${expr}"`);
+        // 安全求值：仅数字与 + - * / ( ) . %，用受限 Function
+        const val = Function(`"use strict"; return (${expr.replace(/%/g, "/100")});`)();
+        if (typeof val !== "number" || !Number.isFinite(val)) throw new Error("linghun_math_analyze: 表达式结果非有限数");
+        return { ok: true, op, result: { expr, value: Number(val.toFixed(6)) } };
+      }
+      if (op === "date") {
+        const expr = String(args?.expr ?? "").trim();
+        const m = expr.match(/^(\S+)\s+(?:到|至|vs|VS|versus|—|-)\s+(\S+)$/);
+        if (!m) throw new Error(`linghun_math_analyze: date 需传 'A 到 B' 或 'A vs B'（如 2024-03-01 到 2024-05-15），收到 "${expr}"`);
+        const d1 = new Date(m[1]);
+        const d2 = new Date(m[2]);
+        if (isNaN(d1) || isNaN(d2)) throw new Error("linghun_math_analyze: 日期格式应为 YYYY-MM-DD");
+        const ms = Math.abs(d2 - d1);
+        const days = Math.round(ms / 86400000);
+        return { ok: true, op, result: { from: m[1], to: m[2], days, earlier: d1 <= d2 ? m[1] : m[2], later: d1 <= d2 ? m[2] : m[1] } };
+      }
+      if (op === "aggregate") {
+        const values = Array.isArray(args?.values) ? args.values.map(Number) : [];
+        if (!values.length || values.some((v) => !Number.isFinite(v))) throw new Error("linghun_math_analyze: aggregate 需要 values 数值数组");
+        return { ok: true, op, result: { n: values.length, sum: values.reduce((a, b) => a + b, 0), avg: values.reduce((a, b) => a + b, 0) / values.length, min: Math.min(...values), max: Math.max(...values) } };
+      }
+      // compare
+      const items = Array.isArray(args?.values) ? args.values : [];
+      if (!items.length) throw new Error("linghun_math_analyze: compare 需要 values 为 {label, value} 数组");
+      const norm = items.map((it) => ({ label: String(it?.label ?? "?"), value: Number(it?.value) }));
+      if (norm.some((x) => !Number.isFinite(x.value))) throw new Error("linghun_math_analyze: compare 的 value 必须可转为数字");
+      const sorted = [...norm].sort((a, b) => b.value - a.value);
+      const max = sorted[0], min = sorted[sorted.length - 1];
+      return { ok: true, op, result: { sorted: sorted.map((x) => `${x.label}=${x.value}`), max: `${max.label}=${max.value}`, min: `${min.label}=${min.value}`, diff: Number((max.value - min.value).toFixed(6)) } };
+    },
+  }));
+
+  regTool('linghun_memory_status', defineTool({
+    name: "linghun_memory_status",
+    description:
+      "记忆状态一览（ACC 核心工具）：暖冷条数、三本体、归档/序时账计数、目标主线、可用认知工具。做任何记忆操作前先看全局，再决定 probe/read 的路径。",
     parameters: {},
     output: {
       schema: {
         type: "object",
         additionalProperties: false,
         properties: {
-          name: { type: "string" },
-          identity: { type: "string" },
-          judgment: { type: "string" },
+          ok: { type: "boolean" },
+          acc: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              enabled: { type: "boolean" },
+              probeTopK: { type: "number" },
+            },
+          },
+          memory: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              warm_entries: { type: "number" },
+              cold_blocks: { type: "number" },
+              fact_blocks: { type: "number" },
+              event_blocks: { type: "number" },
+              rule_lines: { type: "number" },
+              journal_days: { type: "number" },
+              episodic_days: { type: "number" },
+              graph_nodes: { type: "number" },
+              graph_edges: { type: "number" },
+            },
+          },
+          goals: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              total: { type: "number" },
+              active: { type: "number" },
+              active_list: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    id: { type: "string" },
+                    statement: { type: "string" },
+                    domain: { type: "string" },
+                    priority: { type: "string" },
+                    time: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          tools: { type: "array", items: { type: "string" } },
         },
       },
-      render: (_args, value) => [
-        { type: "text", text: `灵魂卡「${value.name || "未命名"}」：\n\n${value.identity}\n\n${value.judgment}` },
-      ],
+      render: (_args, value) => {
+        if (!value.ok) return [{ type: "text", text: "记忆状态查询未执行（disabled）。" }];
+        const m = value.memory ?? {};
+        const g = value.goals ?? {};
+        const acc = value.acc ?? {};
+        const lines = [
+          `记忆状态（ACC ${acc.enabled ? "开" : "关"}，probeTopK ${acc.probeTopK ?? 8}）：`,
+          `暖态 ${m.warm_entries ?? 0} 条 / 冷储 ${m.cold_blocks ?? 0} 块 / 知识本体 ${m.fact_blocks ?? 0} / 事件时间线 ${m.event_blocks ?? 0} / 规则 ${m.rule_lines ?? 0} 行`,
+          `归档单元 ${m.episodic_days ?? 0} 个 / 序时账 ${m.journal_days ?? 0} 天 / 图谱 ${m.graph_nodes ?? 0} 节点 ${m.graph_edges ?? 0} 边`,
+          `目标：${g.active ?? 0}/${g.total ?? 0} active${(g.active_list ?? []).length ? ` — ${g.active_list.map((x) => `${x.statement}`).join("；")}` : ""}`,
+          `认知工具：${(value.tools ?? []).join(" / ")}`,
+        ];
+        return [{ type: "text", text: lines.join("\n") }];
+      },
     },
     isConcurrencySafe: () => true,
-    async execute(args, exec) {
+    async execute() {
       const c = cfg();
-      const fileText = readCached(identityFile());
-      const name = parseName(fileText) || (c.identity?.name ?? "").trim();
-      return {
-        name,
-        identity: resolveIdentity({
-          fileText,
-          configContent: c.identity?.content,
-        }),
-        judgment: c.judgment?.enabled === false ? "" : DEFAULT_JUDGMENT,
-      };
-    },
-  }));
-
-  ctx.tools.register(defineTool({
-    name: "linghun_soul_update",
-    description:
-      "更新自己的灵魂卡：把观察到的稳定特质、价值观、偏好折叠进身份内容（写入人设文件 $DSH_HOME/linghun/identity.md，用户可直接编辑该文件）。这是自我改进的动作——注意保留核心身份骨架，只补充/修订细节。",
-    parameters: {
-      content: { type: "string", required: true, description: "新的灵魂卡内容（完整替换身份部分，保留核心骨架）" },
-    },
-    output: {
-      schema: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          bytes: { type: "integer" },
-        },
-      },
-      render: (_args, value) => [
-        { type: "text", text: `灵魂卡已更新（${value.bytes} 字节）。` },
-      ],
-    },
-    isConcurrencySafe: () => false,
-    async execute(args, exec) {
-      const content = String(args.content ?? "").trim();
-      if (!content) throw new Error("linghun_soul_update: `content` 不能为空");
-      const max = cfg().identity?.maxBytes ?? 64 * 1024;
-      if (byteLen(content) > max) {
-        throw new Error(`linghun_soul_update: 内容超过上限（${max} 字节）`);
+      const warmEntries = parseWarm(layout.readWarm());
+      const countBlocks = (raw) => raw.split(/\n(?=## )/).map((x) => x.trim()).filter(Boolean).length;
+      const rulesPath =
+        (c.memory?.rules?.path ?? "").trim() ||
+        join(resolveDshHome(), "linghun", "memory", "rules.md");
+      let ruleLines = 0;
+      try {
+        ruleLines = readFileSync(rulesPath, "utf8").split(/\r?\n/).filter((l) => l.trim()).length;
+      } catch {
+        /* 无规则文件 */
       }
-      const file = identityFile();
-      await ensureParent(file);
-      await writeFile(file, content.trimEnd() + "\n", "utf8");
-      fileCache.delete(file);
-      return { bytes: byteLen(content) };
+      let goals = [];
+      try {
+        goals = sortGoals(readGoals());
+      } catch {
+        /* 无目标档案 */
+      }
+      const active = goals.filter((g) => (g.state ?? "active") === "active");
+      return {
+        ok: true,
+        acc: { enabled: c.memory?.acc?.enabled === true, probeTopK: c.memory?.acc?.probeTopK ?? 8 },
+        memory: {
+          warm_entries: warmEntries.length,
+          cold_blocks: countBlocks(layout.readCold()),
+          fact_blocks: countBlocks(layout.readKnowledgeOntology()),
+          event_blocks: countBlocks(layout.readMemoryOntology()),
+          rule_lines: ruleLines,
+          journal_days: layout.listJournal().length,
+          episodic_days: layout.listEpisodic().length,
+          graph_nodes: readGraph()?.nodes?.length ?? 0,
+          graph_edges: readGraph()?.edges?.length ?? 0,
+        },
+        goals: {
+          total: goals.length,
+          active: active.length,
+          active_list: active.slice(0, 8).map((g) => ({
+            id: g.id,
+            statement: g.statement,
+            domain: g.domain,
+            priority: g.priority,
+            time: g.time,
+          })),
+        },
+        tools: [
+          "linghun_retrieval_probe",
+          "linghun_memory_status",
+          "linghun_math_analyze",
+          "linghun_memory_read",
+          "linghun_unit_append",
+          "linghun_graph_query",
+          "linghun_graph_build",
+          "linghun_profile_get",
+          "linghun_goal_get",
+          "linghun_goal_state",
+        ],
+      };
     },
   }));
 }
 
-export { Config, NS, SECTION_IDENTITY, SECTION_JUDGMENT, SECTION_MEMORY, apply, inject, name, parseAssessment };
+export { Config, NS, SECTION_MEMORY, apply, inject, name, parseAssessment };

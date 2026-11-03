@@ -1,0 +1,1291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GroupMemBench 725 题全量复核报告 · 判据审计与真实正确率 · 2026-11-03</title>
+<style>
+:root{
+  --bg:#f5f7f9;
+  --surface:#ffffff;
+  --ink:#151a21;
+  --ink-2:#4f5a68;
+  --ink-3:#68737f;
+  --line:#dde2e8;
+  --line-strong:#bcc5d0;
+  --accent:#0d6a68;
+  --accent-soft:#e3f0ef;
+  --exact:#2c7a52;
+  --exact-bg:#e6f2eb;
+  --compat:#7d6a1f;
+  --compat-bg:#f4efdc;
+  --cg:#a33327;
+  --cg-bg:#f8e7e4;
+  --cc:#9a5312;
+  --cc-bg:#faeddf;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  --pad:clamp(16px,4vw,56px);
+  --radius:3px;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);font-size:16px;line-height:1.65;
+}
+.wrap{max-width:1240px;margin:0 auto;padding:0 var(--pad)}
+h1,h2,h3{line-height:1.28;letter-spacing:-0.01em;margin:0;overflow-wrap:break-word}
+h1{font-size:clamp(26px,4vw,40px);font-weight:640}
+h2{font-size:clamp(20px,2.6vw,27px);font-weight:620;margin:0 0 6px}
+h3{font-size:17px;font-weight:620;margin:28px 0 10px}
+p{margin:0 0 14px}
+a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:2px}
+a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+code,.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* header */
+header.top{
+  background:var(--surface);border-bottom:1px solid var(--line);
+  padding:clamp(28px,5vw,52px) 0 clamp(24px,4vw,40px);
+}
+.eyebrow{
+  font-size:12.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:600;margin:0 0 12px;
+}
+.lede{color:var(--ink-2);font-size:clamp(15px,1.6vw,17.5px);max-width:64ch;margin:14px 0 0}
+.hero-stats{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));
+  gap:1px;background:var(--line);border:1px solid var(--line);
+  margin:clamp(24px,4vw,36px) 0 0;border-radius:var(--radius);overflow:hidden;
+}
+.hs{background:var(--surface);padding:18px 20px}
+.hs .k{font-size:12px;letter-spacing:.06em;color:var(--ink-3);text-transform:uppercase;font-weight:600}
+.hs .v{font-family:var(--mono);font-variant-numeric:tabular-nums;
+  font-size:clamp(26px,3.4vw,36px);font-weight:620;letter-spacing:-0.02em;margin:6px 0 0;line-height:1.1}
+.hs .s{font-size:13px;color:var(--ink-2);margin-top:4px}
+.hs.a .v{color:var(--accent)}
+.hs.w .v{color:var(--cc)}
+.hs.g .v{color:var(--cg)}
+
+/* nav */
+nav.toc{
+  background:var(--surface);border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:20;
+}
+nav.toc ul{
+  list-style:none;display:flex;gap:2px;margin:0;padding:0;
+  overflow-x:auto;scrollbar-width:thin;
+}
+nav.toc a{
+  display:block;padding:13px 14px;font-size:13.5px;color:var(--ink-2);
+  text-decoration:none;white-space:nowrap;border-bottom:2px solid transparent;
+}
+nav.toc a:hover{color:var(--ink);background:var(--bg)}
+
+/* sections */
+main{padding:clamp(28px,4vw,52px) 0 80px}
+section{margin:0 0 clamp(40px,6vw,72px);scroll-margin-top:64px}
+.sec-head{border-top:2px solid var(--ink);padding-top:14px;margin-bottom:22px}
+.sec-num{font-family:var(--mono);font-size:12.5px;color:var(--accent);font-weight:600;letter-spacing:.08em}
+.sec-sub{color:var(--ink-2);font-size:15px;max-width:72ch;margin:8px 0 0}
+
+/* tables */
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
+caption{text-align:left;padding:14px 16px 0;font-size:13px;color:var(--ink-3)}
+th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line)}
+thead th{
+  background:#f0f3f6;font-size:12.5px;font-weight:640;color:var(--ink-2);
+  letter-spacing:.03em;white-space:nowrap;
+}
+tbody tr:last-child td{border-bottom:none}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+tbody tr:hover{background:#fafbfc}
+tr.total td{font-weight:640;background:#f7f9fa;border-top:1px solid var(--line-strong)}
+tr.grp td{background:#eef2f5;font-weight:640;font-size:13px;letter-spacing:.03em;color:var(--ink-2)}
+
+/* heat */
+td.heat{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right;font-weight:600}
+.h-exact{background:var(--exact-bg)}
+.h-mid{background:var(--compat-bg)}
+.h-low{background:var(--cg-bg)}
+.h-crit{background:#f2d6d2}
+td.up{color:var(--accent);font-family:var(--mono);font-weight:600;text-align:right}
+
+/* verdict chips */
+.chip{
+  display:inline-flex;align-items:center;gap:6px;
+  font-size:12.5px;font-weight:600;padding:2px 9px;border-radius:2px;
+  font-family:var(--mono);white-space:nowrap;
+}
+.c-exact{background:var(--exact-bg);color:var(--exact)}
+.c-compat{background:var(--compat-bg);color:var(--compat)}
+.c-cg{background:var(--cg-bg);color:var(--cg)}
+.c-cc{background:var(--cc-bg);color:var(--cc)}
+
+/* bars */
+.bars{margin:18px 0 0;display:grid;gap:10px}
+.bar-row{display:grid;grid-template-columns:minmax(120px,170px) 1fr minmax(96px,120px);gap:14px;align-items:center}
+.bar-lab{font-size:13.5px;font-weight:600}
+.bar-track{height:22px;background:#e9edf1;border-radius:2px;overflow:hidden;position:relative}
+.bar-fill{height:100%;border-radius:2px}
+.bar-ghost{position:absolute;top:0;height:100%;background:repeating-linear-gradient(45deg,#c9d1da,#c9d1da 4px,#e2e8ee 4px,#e2e8ee 8px);opacity:.85}
+.bar-val{font-family:var(--mono);font-size:13px;text-align:right;color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+/* callouts */
+.note{
+  border-left:3px solid var(--accent);background:var(--accent-soft);
+  padding:14px 18px;margin:20px 0;font-size:14.5px;color:#0b4f4d;
+}
+.warn{border-left-color:var(--cc);background:var(--cc-bg);color:#7a4310}
+.bad{border-left-color:var(--cg);background:var(--cg-bg);color:#7d2419}
+.note p:last-child{margin-bottom:0}
+.note strong{font-weight:660}
+
+/* cases */
+.case{
+  border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);
+  margin:0 0 10px;
+}
+.case summary{
+  cursor:pointer;padding:13px 16px;font-size:14.5px;
+  display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;
+  list-style:none;
+}
+.case summary::-webkit-details-marker{display:none}
+.case summary::before{
+  content:"＋";font-family:var(--mono);color:var(--ink-3);font-size:13px;flex:0 0 auto;
+}
+.case[open] summary::before{content:"－"}
+.case summary:hover{background:#fafbfc}
+.case .tag{font-family:var(--mono);font-size:12px;color:var(--ink-3)}
+.case .qt{font-size:12.5px;color:var(--ink-2);background:#eef1f4;padding:1px 7px;border-radius:2px}
+.case .body{padding:2px 16px 16px 44px;font-size:14px;color:var(--ink-2)}
+.case dl{display:grid;grid-template-columns:76px 1fr;gap:8px 14px;margin:0}
+.case dt{font-size:12.5px;color:var(--ink-3);font-weight:600;padding-top:2px}
+.case dd{margin:0;color:var(--ink);overflow-wrap:anywhere}
+.case dd.why{color:var(--ink-2);font-size:13.5px}
+
+/* two-col */
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:clamp(20px,3vw,36px);align-items:start}
+.card{
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  padding:20px 22px;min-width:0;overflow-wrap:anywhere;
+}
+.card h3{margin:0 0 10px;font-size:15.5px}
+.card ul{margin:0;padding-left:18px;font-size:14.5px;color:var(--ink-2)}
+.card li{margin:0 0 7px}
+.card li:last-child{margin-bottom:0}
+
+footer{
+  border-top:1px solid var(--line);background:var(--surface);
+  padding:26px 0 40px;font-size:13px;color:var(--ink-3);
+}
+footer p{margin:0 0 6px}
+
+@media (max-width:640px){
+  .bar-row{grid-template-columns:1fr;gap:5px}
+  .bar-val{text-align:left}
+  .case .body{padding-left:16px}
+  .case dl{grid-template-columns:1fr;gap:2px}
+  .case dt{margin-top:6px}
+}
+@media print{
+  body{background:#fff;font-size:11pt}
+  nav.toc{position:static;border-bottom:1px solid #999}
+  .case{border:1px solid #bbb;break-inside:avoid}
+  .case .body{display:block!important}
+  details{break-inside:avoid;border:1px solid #bbb}
+  section{break-inside:auto;margin-bottom:24pt}
+  .sec-head{break-after:avoid}
+  thead th{position:static;background:#eee}
+  a[href^="http"]::after{content:" (" attr(href) ")";font-size:9pt;color:#555}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <p class="eyebrow">GroupMemBench · 判据审计 · 2026-11-03</p>
+    <h1>725 题全量复核：真实正确率 83.0%–84.7%，金标有问题 85 条</h1>
+    <p class="lede">本报告回答两个问题：这套 725 题基准的判分器算得准不准，以及被测 agent 的真实水平是多少。基准自带一个 <b>judge1</b>（算出 69.1%），我们另写了一个引入语料证据集合的 <b>judge2</b>（算出 74.2%）——它没有把「题目错」当作判分目标，却把题目问题暴露了出来。逐条人工复核 187 条非对样本后，结论是：<b>判分器本身很准</b>——它挑出了 64 道有问题的题，判出的 111 条「agent 错」里有 102 条 agent 确实答错，三分类准确率 97.1%，漏判 4 条。真正的问题只有一个：它把「题目有问题」这个出口接到了「agent 错」的计分上，让 64 条本该记在基准账上的错，被记到了 agent 头上。</p>
+    <div class="hero-stats">
+      <div class="hs a"><div class="k">真实正确率（下界）</div><div class="v">83.0%</div><div class="s">602 / 725</div></div>
+      <div class="hs a"><div class="k">真实正确率（上界）</div><div class="v">84.7%</div><div class="s">614 / 725</div></div>
+      <div class="hs g"><div class="k">金标有问题</div><div class="v">85</div><div class="s">占 11.7%</div></div>
+      <div class="hs"><div class="k">金标对 · agent 错</div><div class="v">102</div><div class="s">判分器判对的部分</div></div>
+      <div class="hs w"><div class="k">语料查无实据</div><div class="v">9</div><div class="s">占 1.2%</div></div>
+    </div>
+  </div>
+</header>
+
+<nav class="toc" aria-label="章节导航">
+  <div class="wrap">
+    <ul>
+      <li><a href="#s1">一、判据是什么</a></li>
+      <li><a href="#s2">二、四把尺子</a></li>
+      <li><a href="#s3">三、四档之外的真实分布</a></li>
+      <li><a href="#s4">四、24 格矩阵</a></li>
+      <li><a href="#s5">五、题型横切</a></li>
+      <li><a href="#s6">六、口径全表</a></li>
+      <li><a href="#s7">七、金标审计</a></li>
+      <li><a href="#s8">八、cg 的 111 条错在哪</a></li>
+      <li><a href="#s9">九、判分器表现</a></li>
+      <li><a href="#s10">十、结论</a></li>
+      <li><a href="#s11">附：术语与方法</a></li>
+    </ul>
+  </div>
+</nav>
+
+<main>
+<div class="wrap">
+
+<!-- 1 -->
+<section id="s1">
+  <div class="sec-head">
+    <div class="sec-num">01 / THE JUDGE</div>
+    <h2>先说清楚判据：两个判分器、四个档位，cc 为什么会被记成 agent 错</h2>
+    <p class="sec-sub">这份基准自带一个 judge1，我们另写了一个 judge2。报告的每个数字都依赖这两个判分器的分工和 judge2 的四个档位——不先讲明白，后面的数字都没法读。</p>
+  </div>
+
+  <h3>1.1 评测是怎么跑的</h3>
+  <p>流程分四步，每一步的产物都会影响最终分数：</p>
+  <div class="tw">
+    <table>
+      <thead>
+        <tr><th class="n">步骤</th><th>做什么</th><th>输出</th><th>这一层可能出什么错</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="n">1</td><td>被测 agent 回答 725 道题</td><td>agent 答案 + 完整输出</td><td>答错、答偏、超时、拒答</td></tr>
+        <tr><td class="n">2</td><td>judge1 粗判（基准自带）</td><td>对 / 错（二选一）</td><td>把「表述不同但语义等价」判成错</td></tr>
+        <tr><td class="n">3</td><td>judge2 细判（我们自研）</td><td>四档之一（见下表）</td><td>档位定义与计分规则脱节</td></tr>
+        <tr><td class="n">4</td><td>人工逐条复核</td><td>本报告</td><td>复核者的判断本身也有主观性</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:14px">三个术语在全文反复出现，先固定下来：<b>金标</b>（gold answer）是数据集给出的参考答案；<b>agent</b> 是被评测的智能体；<b>语料</b>是出题所依据的原始对话记录，也就是判断金标对不对的唯一依据。</p>
+
+  <h3>1.2 两个判分器：一个是基准自带的，一个是我们自研的</h3>
+  <p>这一点必须先说清楚，否则后面所有数字都会读错。上面第 2 步和第 3 步用的是两个完全不同的判分器：</p>
+  <div class="tw">
+    <table>
+      <caption>judge1 与 judge2 的分工</caption>
+      <thead><tr><th></th><th>judge1 · 基准原判分器</th><th>judge2 · 我们自研</th></tr></thead>
+      <tbody>
+        <tr><td>来历</td><td>GroupMemBench 基准自带的判分器，随数据集一起发布</td><td>我们为复核这套基准自己写的，代码在 <code>scripts/judge2.py</code></td></tr>
+        <tr><td>输入</td><td>问题 + 金标 + agent 答案</td><td>问题 + 金标 + agent 答案 + <b>语料证据集合</b></td></tr>
+        <tr><td>判法</td><td>语义比对：agent 答案和金标是不是一个意思</td><td>集合判断：把 agent 引用、按问题检索、按金标检索、按 agent 答案检索四路捞出的语料段落拼成一束证据，看这束证据整体支持谁</td></tr>
+        <tr><td>输出</td><td>对 / 错</td><td>四档：<code>exact</code> / <code>compatible</code> / <code>conflict_gold</code> / <code>conflict_corpus</code></td></tr>
+        <tr><td>算出的正确率</td><td class="n">69.1%</td><td class="n">74.2%（计分仍按二分类）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p style="margin-top:16px"><b>「集合思维」是 judge2 的核心设计。</b>它不逐句比对 agent 答案和金标像不像，而是先把「和这道题相关的语料」整体捞出来——agent 自己引用了哪些消息、按问题检索到哪些、按金标检索到哪些、按 agent 答案检索到哪些——形成一束证据，然后只问一个问题：<b>这一束证据整体上站在谁那边？</b></p>
+  <p>这么设计带来一个副作用，也是这份报告全部发现的来源：<b>它必须回答「语料支持谁」，就不可避免要判断金标站不站得住。</b>当证据整体站在 agent 那边时，judge2 输出 cc——这个档位的字面意思是「agent 和金标矛盾，语料支持 agent」，实际含义是<b>「这道题的金标有问题」</b>。</p>
+
+  <div class="note">
+    <p><strong>关键一句：judge2 没有把「题目错了」当作判分目标，但它把这个东西暴露了出来。</strong></p>
+    <p>它的设计目标是判「agent 答得对不对」，四档里三档都围绕 agent。cc 本来只是「agent 和金标矛盾时语料站谁」的一个分支，不是为审计基准设计的。但正因为引入了语料这个第三方，它客观上成了一台<b>基准质量探测器</b>——64 次 cc 判定，就是 64 道题的出题问题被顺手照了出来。</p>
+    <p>反过来说，它也没有能力把「题目错」干净地判出来。cc 只覆盖「语料明确支持 agent」的情况（三条件全满足）；语料沉默、双方都对不上、金标查无实据，它都判不出来，只能归到 cg 或按默认规则信金标。这份报告里那 9 条「金标查无实据」和 8 条「双方都无法判」，就是 judge2 照不到的死角，靠人工复核补的。</p>
+  </div>
+
+  <h3>1.3 四档的准确定义</h3>
+  <p>下面引的是判分器提示词里的原文定义（<code>scripts/judge2.py</code> 第 67–83 行），后面是中文说明和计分结果。</p>
+  <div class="tw">
+    <table>
+      <caption>四档定义与计分规则</caption>
+      <thead>
+        <tr><th>档位</th><th>判据原文要点</th><th>中文含义</th><th class="n">条数</th><th>计分</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="chip c-exact">exact</span></td>
+          <td>The agent answer states the gold answer's core claim. Wording, length and detail may differ.</td>
+          <td>agent 说中了金标的核心主张，措辞、长度、细节可以不同</td>
+          <td class="n">511</td><td>对</td>
+        </tr>
+        <tr>
+          <td><span class="chip c-compat">compatible</span></td>
+          <td>Does not contradict the gold, but differs in granularity or angle. One may be coarser or finer.</td>
+          <td>不矛盾，只是粒度或角度不同，一粗一细，方向一致</td>
+          <td class="n">27</td><td>对</td>
+        </tr>
+        <tr>
+          <td><span class="chip c-cg">conflict_gold</span><br><span class="tag" style="font-size:12px;color:var(--ink-3)">简称 cg</span></td>
+          <td>Substantively conflicts with the gold, <b>AND the corpus evidence supports the gold</b>.</td>
+          <td>agent 和金标实质矛盾，<b>且语料站在金标这边</b>——即 agent 答错了</td>
+          <td class="n">123</td><td>错</td>
+        </tr>
+        <tr>
+          <td><span class="chip c-cc">conflict_corpus</span><br><span class="tag" style="font-size:12px;color:var(--ink-3)">简称 cc</span></td>
+          <td>Substantively conflicts with the gold, <b>BUT the corpus evidence supports the agent</b>.</td>
+          <td>agent 和金标实质矛盾，<b>但语料站在 agent 这边</b>——即金标答错了</td>
+          <td class="n">64</td><td>错</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>1.4 为什么这两个名字容易搞反</h3>
+  <div class="note">
+    <p><strong>cg 和 cc 的前提完全一样：</strong>都是「agent 答案和金标实质矛盾」。两个档的唯一区别是<b>语料支持谁</b>。</p>
+    <p>但名字里的 conflict 指代的对象不一致：<code>conflict_gold</code> 读起来像「与金标冲突」（其实两个档都与金标冲突），<code>conflict_corpus</code> 读起来像「与语料冲突」（其实语料是支持 agent 的）。</p>
+    <p><b>更准确的名字应该是</b> <code>corpus_supports_gold</code>（语料支持金标 → agent 错）和 <code>corpus_supports_agent</code>（语料支持 agent → 金标错）。本报告后文统一用 cg 和 cc，请按上表的实际含义理解。</p>
+  </div>
+
+  <h3>1.5 cc 的门槛：三条必须同时成立</h3>
+  <p>判据原文对 cc 写得很严，原文是「The bar for this verdict is very high. ALL THREE must hold」：</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th class="n">条件</th><th>原文</th><th>中文</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="n">(a)</td>
+          <td>at least one explicit passage states the agent's conclusion in substance</td>
+          <td>至少有一段明确段落，实质陈述了 agent 的结论</td>
+        </tr>
+        <tr>
+          <td class="n">(b)</td>
+          <td>that same passage contradicts the gold answer</td>
+          <td>同一段与金标答案矛盾</td>
+        </tr>
+        <tr>
+          <td class="n">(c)</td>
+          <td>the passage answers THE SAME question the user asked (same object, same aspect, same time point)</td>
+          <td>该段回答的是用户问的同一个问题（同对象、同方面、同时间点）</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:14px">判据还明确补了一条（第 116 行）：<b>决策语言优先于提议语言</b>。如果金标反映的是早期提议（<code>Proposal:</code>、<code>Suggestion:</code>、<code>should we</code>），而 agent 报的是后来的最终决定（<code>Final:</code>、<code>Locking X</code>、<code>Closing the map with X</code>），<b>应判 cc</b>。</p>
+
+  <h3>1.6 cc 的定位：它不是判 agent 错，是判题目有问题</h3>
+  <p>这是全文最容易被误读的一处，先说清楚：<b>判分器实际上在做三分类，不是二分类。</b></p>
+  <div class="tw">
+    <table>
+      <caption>判分器的三个出口</caption>
+      <thead><tr><th class="n">出口</th><th>档位</th><th class="n">条数</th><th>判分器在说什么</th></tr></thead>
+      <tbody>
+        <tr><td class="n">一</td><td><span class="chip c-exact">exact</span> <span class="chip c-compat">compatible</span></td><td class="n">538</td><td>agent 答对了</td></tr>
+        <tr><td class="n">二</td><td><span class="chip c-cg">conflict_gold</span></td><td class="n">123</td><td>agent 答错了</td></tr>
+        <tr><td class="n">三</td><td><span class="chip c-cc">conflict_corpus</span></td><td class="n">64</td><td><b>题目有问题，agent 没错</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:14px">第三个出口是判分器最有价值的地方。它的三条件（见 1.5）设计得很严，一旦满足，就等于宣布：<b>这道题的金标站不住，agent 的答案反而有语料支撑。</b>这不是判分器判错了，是它<b>把出题环节的问题揪出来了</b>。</p>
+  <p><b>但要说清楚：这个出口不是为「判题目错」设计的。</b>judge2 的目标始终是判 agent 答得对不对，cc 只是「agent 和金标矛盾时，语料站谁」的一个分支。它把题目问题暴露出来，是集合思维带出的副产品——因为必须去查语料，就不得不回答金标站不站得住。这也决定了它的能力边界：只能照出「语料明确支持 agent」的那 64 道，照不到语料沉默的 9 条和双方都对不上的 8 条，那两类只能靠人工补。</p>
+  <p>问题出在下一步：计分规则（<code>judge2.py</code> 第 335 行）只认二分类。</p>
+  <pre style="background:#f0f3f6;border:1px solid var(--line);border-radius:3px;padding:12px 14px;overflow-x:auto;font-family:var(--mono);font-size:13px;line-height:1.5"><code>"verdict2_binary": "correct" if v2 in ("exact", "compatible") else "incorrect"</code></pre>
+  <p style="margin-top:12px">只有 <code>exact</code> 和 <code>compatible</code> 算对，<code>cc</code> 被压成了 <b>incorrect</b>。于是：</p>
+  <div class="bad note">
+    <p><b>判分器说：</b>这道题金标有问题，agent 答得对。<br>
+    <b>计分说：</b>agent 错。</p>
+    <p style="margin-top:10px"><b>这不是判分器判错，是判分器的第三个出口没接到计分上。</b>63 条本该记在基准账上的错误，被记到了 agent 头上。判分器做了正确的判断，但结论在出口处被丢掉了。</p>
+  </div>
+
+  <h3>1.7 一个具体例子</h3>
+  <details class="case" open>
+    <summary>
+      <span class="tag">Technology · knowledge_update_26</span>
+      <span class="qt">知识更新</span>
+      <span>金标停在早期提议，agent 报的是五条决策点锁死的最终契约</span>
+    </summary>
+    <div class="body">
+      <dl>
+        <dt>问题</dt><dd>What is the current approach for handling stale transport metadata after a coverage-zone handoff?</dd>
+        <dt>金标</dt><dd>重开 handoff contract，加 transport-metadata freshness 检查和条件性 re-ACK / replay</dd>
+        <dt>agent</dt><dd>resume 时硬拒：标记为 sequence-valid but transport-invalid，只进 telemetry，不 re-ACK、不 replay</dd>
+        <dt>语料</dt><dd>Msg_5175、Msg_5278、Msg_5460、Msg_8372、Msg_9999 五条决策点锁定 hard-reject / telemetry-only 契约；<b>金标所依据的 Msg_4402 是早期 proposal</b></dd>
+        <dt>judge2 判定</dt><dd><span class="chip c-cc">conflict_corpus</span> 理由原文：「the conflict is resolved <b>in the agent's favor</b> by the corpus」</dd>
+        <dt class="why">问题</dt><dd class="why">判据自己写了「语料站在 agent 这边」，按第 116 行的「决策语言优先于提议语言」规则也该判 cc——判得没错。<b>但 cc 计分为错，这条答对的样本被记成了答错。</b></dd>
+      </dl>
+    </div>
+  </details>
+
+  <h3>1.8 cg 为什么反而基本准</h3>
+  <p>cg 是「其余全部」的兜底档：所有不满足 cc 三条件、又不属于 exact / compatible 的样本都掉进来。这个集合里混着各种情况——agent 答了别的对象、agent 弃答、agent 超时、agent 答了第三版本。这些 agent 确实错，所以 cg 判「agent 错」在大多数情况下是对的。</p>
+  <p><b>逐条核完 123 条后，cg 的内部构成是这样的：</b></p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>cg 内部实际情况</th><th class="n">条数</th><th>金标</th><th>agent</th><th>该怎么算</th></tr></thead>
+      <tbody>
+        <tr><td><b>金标站得住，agent 答错</b></td><td class="n"><b>94</b></td><td>对</td><td>错</td><td>算错，<b>判分器判对了</b></td></tr>
+        <tr><td>金标站得住，agent 超时未输出</td><td class="n">8</td><td>对</td><td>无输出</td><td>算错，判分器判对，性质是工程问题</td></tr>
+        <tr><td><b>金标在语料里查无实据</b></td><td class="n"><b>9</b></td><td>无法验证</td><td>错</td><td>存疑：判分器按「默认信金标」判了 agent 错</td></tr>
+        <tr><td>金标被推翻，agent 答对</td><td class="n">1</td><td>错</td><td>对</td><td><b>应算对</b>，现在被算错</td></tr>
+        <tr><td>金标被推翻，agent 部分对</td><td class="n">3</td><td>错</td><td>部分对</td><td>可辩，本报告两种口径都给了</td></tr>
+        <tr><td>金标和语料都对不上</td><td class="n">8</td><td>无法判</td><td>无法判</td><td>题目本身有缺陷</td></tr>
+        <tr class="total"><td>合计</td><td class="n">123</td><td>—</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:14px"><b>关键一点：cg 的 111 条「agent 错」里，94 条金标确实站得住、agent 确实答错。</b>这不是「双方都错」，是判分器正常工作的结果。只有 9 条属于「金标在语料里找不到出处、判分器按默认规则信了金标」——这 9 条才是真正需要打问号的。</p>
+
+  <h3>1.9 所以判分器该改什么：只差一个出口</h3>
+  <div class="cols">
+    <div class="card">
+      <h3>必须改：cc 的计分出口</h3>
+      <ul>
+        <li>把 cc 从「incorrect」改成「gold_defect」一类，不计入 agent 错</li>
+        <li>三条件已经确认「语料支持 agent 且反驳金标」，判分器自己的结论就是 agent 没错</li>
+        <li>改动量：一行代码</li>
+        <li>效果：正确率从 74.2% 到 83.0%，同时基准问题被单独统计出来</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>建议改：cg 再拆一档</h3>
+      <ul>
+        <li>cg 里 8 条其实是「题目本身有缺陷」、9 条「金标查无实据」，和「agent 答错」性质不同</li>
+        <li>拆出 <code>gold_defect</code>：金标和语料都对不上 → 不计入 agent 错</li>
+        <li>这样三个出口就完全对齐：agent 对 / agent 错 / 题目有问题</li>
+        <li>cg 的 94 条「金标对、agent 错」保留在 agent 错里，判得对，不动</li>
+      </ul>
+    </div>
+  </div>
+
+  </section>
+
+<!-- 2 -->
+<section id="s2">
+  <div class="sec-head">
+    <div class="sec-num">02 / FOUR RULERS</div>
+    <h2>四把尺子，量同一个 agent</h2>
+    <p class="sec-sub">同一个 725 题样本，换一种算法就多出十几个百分点。差别全在「被判为不对的那 187 条怎么算」。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>四个口径，逐级把「计分口径的问题」剥离出去</caption>
+      <thead>
+        <tr><th>尺子</th><th class="n">算对</th><th class="n">正确率</th><th class="n">相对上一级</th><th>这一级做了什么</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>① judge1 二选一</td><td class="n">501</td><td class="n">69.1%</td><td class="n">—</td>
+          <td><b>基准自带</b>的判分器。只有对 / 不对，只看 agent 答案和金标像不像，把「表述不同但语义等价」全判成错</td>
+        </tr>
+        <tr>
+          <td>② judge2 四档原判</td><td class="n">538</td><td class="n">74.2%</td><td class="n">+5.1pp</td>
+          <td><b>我们自研</b>。引入语料证据集合，拆出四档，把 <code>exact</code> 和 <code>compatible</code> 算对，但 cc 仍算错</td>
+        </tr>
+        <tr>
+          <td>③ 把 64 条 cc 改判为对</td><td class="n">602</td><td class="n">83.0%</td><td class="n">+8.8pp</td>
+          <td>复核 64 条 cc：63 条 agent 有明确语料支撑，1 条题目本身不唯一</td>
+        </tr>
+        <tr>
+          <td>④ 再把 cg 里已确认对的算上</td><td class="n">614</td><td class="n">84.7%</td><td class="n">+1.7pp</td>
+          <td>复核 123 条 cg：1 条 agent 对、3 条部分对、8 条无法判、111 条 agent 错（其中 94 条金标站得住）</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p><strong>74.2% 这个数字容易被误读。</strong>它不是「agent 只答对了 74.2%」，而是「只有 74.2% 被明确认定为对」。剩下 187 条里，<b>85 条是金标自己有问题或无法验证</b>，另外 102 条是 agent 确实答错。</p>
+    <p>但反过来也不能说「金标有问题，所以 agent 更强」。<b>金标错和 agent 对是两件独立的事</b>：cc 的 64 条里 63 条 agent 确实对；cg 的 123 条里只有 4 条 agent 对或基本对，其余 102 条 agent 确实答错。详见第三节。</p>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="s3">
+  <div class="sec-head">
+    <div class="sec-num">03 / THE REAL 2×2</div>
+    <h2>四档之外：金标 × agent 的真实分布</h2>
+    <p class="sec-sub">金标和 agent 各自对错，本来是 2×2 四种组合。原判据只覆盖了其中三种，第四种「金标错、agent 也错」被并进了 cg——但逐条复核后发现，这一档实际是空的。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>金标 × agent 的完整分布，以及本报告复核后的实际条数</caption>
+      <thead>
+        <tr><th>组合</th><th class="n">条数</th><th>原判据落在哪一档</th><th>是否算对</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>金标对 · agent 对</td><td class="n">538</td><td><span class="chip c-exact">exact</span> <span class="chip c-compat">compatible</span></td><td>是</td><td>无争议</td></tr>
+        <tr><td>金标对 · agent 错</td><td class="n"><b>102</b></td><td><span class="chip c-cg">cg</span></td><td>否</td><td><b>判分器判对了</b>，agent 确实答错（含 8 条超时）</td></tr>
+        <tr><td><b>金标错 · agent 对</b></td><td class="n"><b>64</b></td><td><span class="chip c-cc">cc</span> 63 条 + <span class="chip c-cg">cg</span> 1 条</td><td><b>否（应为是）</b></td><td>判分器判对了，是计分出口把这一档压成了「错」</td></tr>
+        <tr><td>金标错 · agent 部分对</td><td class="n">3</td><td><span class="chip c-cg">cg</span></td><td>否</td><td>可辩，本报告两种口径都给了</td></tr>
+        <tr><td><b>金标错 · agent 也错</b></td><td class="n"><b>0</b></td><td>—</td><td>—</td><td><b>复核后这一档一条都没有</b></td></tr>
+        <tr><td>金标查无实据 · agent 错</td><td class="n">9</td><td><span class="chip c-cg">cg</span></td><td>存疑</td><td>金标关键内容在 12 万条语料里找不到出处，判分器按默认规则信了金标</td></tr>
+        <tr><td>金标和语料都对不上</td><td class="n">8</td><td><span class="chip c-cg">cg</span></td><td>否</td><td>题目本身有缺陷</td></tr>
+        <tr><td>题目双日期不唯一</td><td class="n">1</td><td><span class="chip c-cc">cc</span></td><td>—</td><td>出题缺陷，应剔除</td></tr>
+        <tr class="total"><td>合计</td><td class="n">725</td><td>—</td><td>—</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="cols" style="margin-top:22px">
+    <div class="card">
+      <h3>cc 这一档：判分器立功的地方</h3>
+      <ul>
+        <li>门槛高（三条件全满足），能进来的样本几乎都有明确语料支撑</li>
+        <li>实测 64 条里 63 条 agent 确实答对、题目确实有问题</li>
+        <li>47 条的理由里，判分器自己写了「corpus supports the agent」「in the agent's favor」</li>
+        <li><b>它做对了判断</b>——把出题环节的毛病揪出来了。问题只在计分把这一档压成了「agent 错」</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>cg 这一档：判得基本对，但有 21 条要分开算</h3>
+      <ul>
+        <li>是「其余全部」的兜底档，混着弃答、超时、答偏、答第三版本</li>
+        <li>实测 123 条里 102 条 agent 确实错（94 条金标对 + 8 条超时）——<b>这部分判得对</b></li>
+        <li>漏了 4 条：1 条 agent 全对、3 条部分对，本该进 cc 没进</li>
+        <li>另有 8 条题目缺陷 + 9 条金标查无实据，混在 agent 错里不合适</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="warn note">
+    <p><strong>「双错」这一档不存在。</strong>复核前以为 cg 里装着 111 条「金标错、agent 也错」，逐条核完发现：<b>这 111 条里 94 条金标站得住、agent 确实答错，9 条金标在语料里查不到出处，8 条是超时。</b>真正「金标错且 agent 也错」的一条都没有。</p>
+    <p>这个发现让基准的账好算多了：金标有问题或无法验证的一共 <b>85 条（11.7%）</b>，不是 186 条。</p>
+  </div>
+
+  <div class="warn note">
+    <p><strong>那 9 条「金标查无实据」是怎么判的？</strong>judge2 有一条默认规则：证据沉默时，信金标、不信 agent 的弃答。这 9 条里，judge2 的理由原文就写着「the corpus neither confirms the gold… default is to trust the gold」。所以它们不是「金标错」，是「金标无法验证」——出题时可能依据了语料之外的材料（如项目设计文档），而这份语料没覆盖到。</p>
+    <p>9 条明细：<code>Manufacturing_knowledge_update_15</code>、<code>Technology_knowledge_update_28</code>、<code>Technology_temporal_15</code>、<code>Technology_temporal_29</code>、<code>Technology_term_ambiguity_21 / 22 / 24 / 26 / 30</code>。其中 5 条是术语歧义题，问「某术语对应哪个阶段」，语料里确实没写阶段名。</p>
+  </div>
+
+  <div class="warn note">
+    <p><strong>先排除一个可能的质疑：</strong>用来构建语料证据的 msg_node 索引只有 3,886 条，而原始语料有 12 万条，覆盖率仅 3.2%。如果索引缺失导致 agent 引用的消息查不到，复核结论可能站不住。</p>
+    <p>实测结果：64 条 cc 里 agent 共引用 132 个 msg_node，只有 3 个落在索引之外，<b>0 个在全量语料里不存在</b>。agent 的引用没有幻觉，索引不全不影响结论。</p>
+  </div>
+</section>
+
+<!-- 4 -->
+<section id="s4">
+  <div class="sec-head">
+    <div class="sec-num">04 / MATRIX</div>
+    <h2>领域 × 题型：24 格，每格给三个数</h2>
+    <p class="sec-sub">下界 = cc 全对 + cg 全错；中点 = 再加上 cg 里已确认 agent 对的 4 条；上界 = 再把 8 条无法判的也算对。格子越红，说明这一格的判据问题越大。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr><th>题型</th><th class="n">题数</th><th class="n">原算对</th><th class="n">cc</th><th class="n">原正确率</th><th class="n">下界</th><th class="n">中点</th><th class="n">上界</th><th class="n">cg</th></tr>
+      </thead>
+      <tbody>
+<tr class="grp"><td colspan="9">Finance</td></tr>
+<tr><td>拒答</td><td class="n">29</td><td class="n">20</td><td class="n">8</td><td class="n">69.0%</td><td class="heat h-exact">96.6%</td><td class="heat h-exact">96.6%</td><td class="heat h-exact">96.6%</td><td class="n">1</td></tr>
+<tr><td>知识更新</td><td class="n">32</td><td class="n">22</td><td class="n">2</td><td class="n">68.8%</td><td class="heat h-low">75.0%</td><td class="heat h-low">75.0%</td><td class="heat h-low">75.0%</td><td class="n">8</td></tr>
+<tr><td>多跳</td><td class="n">48</td><td class="n">39</td><td class="n">3</td><td class="n">81.2%</td><td class="heat h-mid">87.5%</td><td class="heat h-exact">89.6%</td><td class="heat h-exact">91.7%</td><td class="n">6</td></tr>
+<tr><td>时间推理</td><td class="n">45</td><td class="n">37</td><td class="n">3</td><td class="n">82.2%</td><td class="heat h-exact">88.9%</td><td class="heat h-exact">88.9%</td><td class="heat h-exact">88.9%</td><td class="n">5</td></tr>
+<tr><td>术语歧义</td><td class="n">35</td><td class="n">29</td><td class="n">3</td><td class="n">82.9%</td><td class="heat h-exact">91.4%</td><td class="heat h-exact">91.4%</td><td class="heat h-exact">91.4%</td><td class="n">3</td></tr>
+<tr><td>隐式意图</td><td class="n">15</td><td class="n">12</td><td class="n">0</td><td class="n">80.0%</td><td class="heat h-mid">80.0%</td><td class="heat h-mid">80.0%</td><td class="heat h-mid">80.0%</td><td class="n">3</td></tr>
+<tr class="grp"><td colspan="9">Healthcare</td></tr>
+<tr><td>拒答</td><td class="n">34</td><td class="n">28</td><td class="n">2</td><td class="n">82.4%</td><td class="heat h-exact">88.2%</td><td class="heat h-exact">88.2%</td><td class="heat h-exact">88.2%</td><td class="n">4</td></tr>
+<tr><td>知识更新</td><td class="n">17</td><td class="n">6</td><td class="n">2</td><td class="n">35.3%</td><td class="heat h-crit">47.1%</td><td class="heat h-crit">47.1%</td><td class="heat h-crit">52.9%</td><td class="n">9</td></tr>
+<tr><td>多跳</td><td class="n">47</td><td class="n">36</td><td class="n">2</td><td class="n">76.6%</td><td class="heat h-mid">80.9%</td><td class="heat h-mid">83.0%</td><td class="heat h-mid">85.1%</td><td class="n">9</td></tr>
+<tr><td>时间推理</td><td class="n">36</td><td class="n">29</td><td class="n">0</td><td class="n">80.6%</td><td class="heat h-mid">80.6%</td><td class="heat h-mid">83.3%</td><td class="heat h-mid">83.3%</td><td class="n">7</td></tr>
+<tr><td>术语歧义</td><td class="n">3</td><td class="n">3</td><td class="n">0</td><td class="n">100.0%</td><td class="heat h-exact">100.0%</td><td class="heat h-exact">100.0%</td><td class="heat h-exact">100.0%</td><td class="n">0</td></tr>
+<tr><td>隐式意图</td><td class="n">2</td><td class="n">2</td><td class="n">0</td><td class="n">100.0%</td><td class="heat h-exact">100.0%</td><td class="heat h-exact">100.0%</td><td class="heat h-exact">100.0%</td><td class="n">0</td></tr>
+<tr class="grp"><td colspan="9">Manufacturing</td></tr>
+<tr><td>拒答</td><td class="n">48</td><td class="n">36</td><td class="n">7</td><td class="n">75.0%</td><td class="heat h-exact">89.6%</td><td class="heat h-exact">89.6%</td><td class="heat h-exact">89.6%</td><td class="n">5</td></tr>
+<tr><td>知识更新</td><td class="n">22</td><td class="n">8</td><td class="n">3</td><td class="n">36.4%</td><td class="heat h-crit">50.0%</td><td class="heat h-crit">50.0%</td><td class="heat h-crit">50.0%</td><td class="n">11</td></tr>
+<tr><td>多跳</td><td class="n">45</td><td class="n">37</td><td class="n">1</td><td class="n">82.2%</td><td class="heat h-mid">84.4%</td><td class="heat h-mid">84.4%</td><td class="heat h-mid">86.7%</td><td class="n">7</td></tr>
+<tr><td>时间推理</td><td class="n">43</td><td class="n">34</td><td class="n">4</td><td class="n">79.1%</td><td class="heat h-exact">88.4%</td><td class="heat h-exact">88.4%</td><td class="heat h-exact">90.7%</td><td class="n">5</td></tr>
+<tr><td>术语歧义</td><td class="n">10</td><td class="n">8</td><td class="n">1</td><td class="n">80.0%</td><td class="heat h-exact">90.0%</td><td class="heat h-exact">90.0%</td><td class="heat h-exact">90.0%</td><td class="n">1</td></tr>
+<tr><td>隐式意图</td><td class="n">4</td><td class="n">2</td><td class="n">0</td><td class="n">50.0%</td><td class="heat h-crit">50.0%</td><td class="heat h-crit">50.0%</td><td class="heat h-crit">50.0%</td><td class="n">2</td></tr>
+<tr class="grp"><td colspan="9">Technology</td></tr>
+<tr><td>拒答</td><td class="n">28</td><td class="n">23</td><td class="n">2</td><td class="n">82.1%</td><td class="heat h-exact">89.3%</td><td class="heat h-exact">89.3%</td><td class="heat h-exact">89.3%</td><td class="n">3</td></tr>
+<tr><td>知识更新</td><td class="n">36</td><td class="n">19</td><td class="n">10</td><td class="n">52.8%</td><td class="heat h-mid">80.6%</td><td class="heat h-mid">80.6%</td><td class="heat h-mid">80.6%</td><td class="n">7</td></tr>
+<tr><td>多跳</td><td class="n">41</td><td class="n">31</td><td class="n">2</td><td class="n">75.6%</td><td class="heat h-mid">80.5%</td><td class="heat h-mid">80.5%</td><td class="heat h-mid">80.5%</td><td class="n">8</td></tr>
+<tr><td>时间推理</td><td class="n">36</td><td class="n">30</td><td class="n">3</td><td class="n">83.3%</td><td class="heat h-exact">91.7%</td><td class="heat h-exact">94.4%</td><td class="heat h-exact">94.4%</td><td class="n">3</td></tr>
+<tr><td>术语歧义</td><td class="n">41</td><td class="n">26</td><td class="n">4</td><td class="n">63.4%</td><td class="heat h-low">73.2%</td><td class="heat h-low">73.2%</td><td class="heat h-mid">80.5%</td><td class="n">11</td></tr>
+<tr><td>隐式意图</td><td class="n">28</td><td class="n">21</td><td class="n">2</td><td class="n">75.0%</td><td class="heat h-mid">82.1%</td><td class="heat h-mid">82.1%</td><td class="heat h-mid">82.1%</td><td class="n">5</td></tr>
+<tr class="total"><td colspan="2">全部</td><td class="n">538</td><td class="n">64</td><td class="n">74.2%</td><td class="n">83.0%</td><td class="n">83.6%</td><td class="n">84.7%</td><td class="n">123</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>按领域汇总</h3>
+  <div class="tw">
+    <table>
+      <thead>
+        <tr><th>领域</th><th class="n">题数</th><th class="n">原算对</th><th class="n">cc</th><th class="n">cg</th><th class="n">原正确率</th><th class="n">下界</th><th class="n">中点</th><th class="n">上界</th></tr>
+      </thead>
+      <tbody>
+<tr><td>Finance</td><td class="n">204</td><td class="n">159</td><td class="n">19</td><td class="n">26</td><td class="n">77.9%</td><td class="heat h-mid">87.3%</td><td class="heat h-mid">87.7%</td><td class="heat h-exact">88.2%</td></tr>
+<tr><td>Healthcare</td><td class="n">139</td><td class="n">104</td><td class="n">6</td><td class="n">29</td><td class="n">74.8%</td><td class="heat h-mid">79.1%</td><td class="heat h-mid">80.6%</td><td class="heat h-mid">82.0%</td></tr>
+<tr><td>Manufacturing</td><td class="n">172</td><td class="n">125</td><td class="n">16</td><td class="n">31</td><td class="n">72.7%</td><td class="heat h-mid">82.0%</td><td class="heat h-mid">82.0%</td><td class="heat h-mid">83.1%</td></tr>
+<tr><td>Technology</td><td class="n">210</td><td class="n">150</td><td class="n">23</td><td class="n">37</td><td class="n">71.4%</td><td class="heat h-mid">82.4%</td><td class="heat h-mid">82.9%</td><td class="heat h-mid">84.3%</td></tr>
+<tr class="total"><td>全部</td><td class="n">725</td><td class="n">538</td><td class="n">64</td><td class="n">123</td><td class="n">74.2%</td><td class="n">83.0%</td><td class="n">83.6%</td><td class="n">84.7%</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p><strong>Healthcare 是唯一没被 cc 抬起来的领域。</strong>下界 79.1%，比其他三个领域低 3–8 个百分点。它的 cc 只有 6 条（金标错但 agent 答对的情况最少），cg 却有 29 条（agent 答错最多）。</p>
+    <p>这个组合说明：<b>Healthcare 的语料表述本身就混乱，金标和 agent 都没抓准</b>。它不是判据问题，是数据质量问题。</p>
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="s5">
+  <div class="sec-head">
+    <div class="sec-num">05 / BY TYPE</div>
+    <h2>题型横切：拒答被抬到 90.6%，知识更新仍然最弱</h2>
+    <p class="sec-sub">实心条是「cc 全对」的下界，斜纹段是 cg 复核带来的增量。</p>
+  </div>
+
+  <div class="bars">
+<div class="bar-row"><div class="bar-lab">拒答</div><div class="bar-track"><div class="bar-ghost" style="left:90.6%;width:0.3%"></div><div class="bar-fill" style="width:90.6%;background:var(--exact)"></div></div><div class="bar-val">90.6 → 90.6</div></div>
+<div class="bar-row"><div class="bar-lab">知识更新</div><div class="bar-track"><div class="bar-ghost" style="left:67.3%;width:0.9%"></div><div class="bar-fill" style="width:67.3%;background:var(--exact)"></div></div><div class="bar-val">67.3 → 68.2</div></div>
+<div class="bar-row"><div class="bar-lab">多跳</div><div class="bar-track"><div class="bar-ghost" style="left:83.4%;width:2.8%"></div><div class="bar-fill" style="width:83.4%;background:var(--exact)"></div></div><div class="bar-val">83.4 → 86.2</div></div>
+<div class="bar-row"><div class="bar-lab">时间推理</div><div class="bar-track"><div class="bar-ghost" style="left:87.5%;width:1.9%"></div><div class="bar-fill" style="width:87.5%;background:var(--exact)"></div></div><div class="bar-val">87.5 → 89.4</div></div>
+<div class="bar-row"><div class="bar-lab">术语歧义</div><div class="bar-track"><div class="bar-ghost" style="left:83.1%;width:3.4%"></div><div class="bar-fill" style="width:83.1%;background:var(--exact)"></div></div><div class="bar-val">83.1 → 86.5</div></div>
+<div class="bar-row"><div class="bar-lab">隐式意图</div><div class="bar-track"><div class="bar-ghost" style="left:79.6%;width:0.3%"></div><div class="bar-fill" style="width:79.6%;background:var(--exact)"></div></div><div class="bar-val">79.6 → 79.6</div></div>
+  </div>
+
+  <div class="tw" style="margin-top:24px">
+    <table>
+      <thead>
+        <tr><th>题型</th><th class="n">题数</th><th class="n">原算对</th><th class="n">cc</th><th class="n">cg</th><th class="n">原正确率</th><th class="n">下界</th><th class="n">中点</th><th class="n">上界</th></tr>
+      </thead>
+      <tbody>
+<tr><td>拒答</td><td class="n">139</td><td class="n">107</td><td class="n">19</td><td class="n">13</td><td class="n">77.0%</td><td class="heat h-exact">90.6%</td><td class="heat h-exact">90.6%</td><td class="heat h-exact">90.6%</td></tr>
+<tr><td>知识更新</td><td class="n">107</td><td class="n">55</td><td class="n">17</td><td class="n">35</td><td class="n">51.4%</td><td class="heat h-crit">67.3%</td><td class="heat h-crit">67.3%</td><td class="heat h-low">68.2%</td></tr>
+<tr><td>多跳</td><td class="n">181</td><td class="n">143</td><td class="n">8</td><td class="n">30</td><td class="n">79.0%</td><td class="heat h-mid">83.4%</td><td class="heat h-mid">84.5%</td><td class="heat h-mid">86.2%</td></tr>
+<tr><td>时间推理</td><td class="n">160</td><td class="n">130</td><td class="n">10</td><td class="n">20</td><td class="n">81.2%</td><td class="heat h-mid">87.5%</td><td class="heat h-exact">88.8%</td><td class="heat h-exact">89.4%</td></tr>
+<tr><td>术语歧义</td><td class="n">89</td><td class="n">66</td><td class="n">8</td><td class="n">15</td><td class="n">74.2%</td><td class="heat h-mid">83.1%</td><td class="heat h-mid">83.1%</td><td class="heat h-mid">86.5%</td></tr>
+<tr><td>隐式意图</td><td class="n">49</td><td class="n">37</td><td class="n">2</td><td class="n">10</td><td class="n">75.5%</td><td class="heat h-mid">79.6%</td><td class="heat h-mid">79.6%</td><td class="heat h-mid">79.6%</td></tr>
+<tr class="total"><td>全部</td><td class="n">725</td><td class="n">538</td><td class="n">64</td><td class="n">123</td><td class="n">74.2%</td><td class="n">5.4%</td><td class="n">5.4%</td><td class="n">5.4%</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="cols" style="margin-top:22px">
+    <div class="card">
+      <h3>拒答 90.6%：最高，但藏着双向不稳</h3>
+      <ul>
+        <li>139 题里 19 条 cc 全部是「金标说无信息、语料其实有、agent 引原文答对」</li>
+        <li>同时 13 条 cg <b>全部</b> agent 错，形态高度一致：金标说无信息、语料确实没有、agent 硬编了一个答案</li>
+        <li>两个方向同时存在，说明 agent 对「语料里到底有没有」的判断不稳定</li>
+        <li>cc 的 19 条：该答，答了</li>
+        <li>cg 的 13 条：不该答，硬答了</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>知识更新 67.3%：最弱，且错法集中</h3>
+      <ul>
+        <li>107 题里 cg 高达 35 条，是各题型里最多的</li>
+        <li>35 条 cg 里 34 条 agent 错，只有 1 条无法判</li>
+        <li>最集中的错法是「答了被推翻的旧状态」：agent 锚在早期消息，没跟上后来的 decision</li>
+        <li>111 条错样本里有 10 条是超时（<code>DSH_TIMEOUT</code>），分散在各题型，不是能力问题</li>
+        <li>cc 的 17 条则相反：金标停在 proposal，agent 报的是后来的 decision</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="warn note">
+    <p><strong>知识更新的双向失败值得单独说。</strong>同一个题型上，agent 既会「比金标新」（cc 17 条），也会「比金标旧」（cg 里有 8 条明确是旧状态）。</p>
+    <p>这不是「agent 总取最新」的单向偏差，而是<b>时间锚点不稳定</b>——有时锚太晚，有时锚太早，取决于检索先撞到哪条消息。</p>
+  </div>
+</section>
+
+<!-- 6 -->
+<section id="s6">
+  <div class="sec-head">
+    <div class="sec-num">06 / ALL CALIBERS</div>
+    <h2>口径全表：十个数字，从 69.1% 到 84.7%</h2>
+    <p class="sec-sub">同一个 agent、同一批题，换个算法差 15.6 个百分点。报哪个数，取决于你想回答什么问题——本报告建议用⑦，把⑥⑧作为区间边界；如果要一个最干净的单一数字，用⑩。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <thead>
+        <tr><th>口径</th><th class="n">分母</th><th class="n">算对</th><th class="n">正确率</th><th>回答的问题</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>① judge1 二选一</td><td class="n">725</td><td class="n">501</td><td class="n">69.1%</td><td>基准自带判分器，只看 agent 答案和金标像不像</td></tr>
+        <tr><td>② judge2 原判</td><td class="n">725</td><td class="n">538</td><td class="n">74.2%</td><td>我们自研，引入语料证据；这是它的直接输出</td></tr>
+        <tr><td>③ 只剔硬站得住 54 条</td><td class="n">671</td><td class="n">538</td><td class="n">80.2%</td><td>去掉争议样本后的比例</td></tr>
+        <tr><td>④ 剔除 60 条</td><td class="n">665</td><td class="n">538</td><td class="n">80.9%</td><td>放宽争议标准</td></tr>
+        <tr><td>⑤ 剔除全部 cc 64 条</td><td class="n">661</td><td class="n">538</td><td class="n">81.4%</td><td>只算金标站得住的题</td></tr>
+        <tr><td><b>⑥ cc 全对 + cg 全错</b></td><td class="n">725</td><td class="n">602</td><td class="n"><b>83.0%</b></td><td><b>真实正确率下界</b>（假设 cg 里 agent 全错）</td></tr>
+        <tr><td><b>⑦ cc 全对 + cg 里 4 条已确认对</b></td><td class="n">725</td><td class="n">606</td><td class="n"><b>83.6%</b></td><td><b>本报告推荐口径</b></td></tr>
+        <tr><td><b>⑧ cc 全对 + cg 里 12 条对或无法判全算对</b></td><td class="n">725</td><td class="n">614</td><td class="n"><b>84.7%</b></td><td><b>真实正确率上界</b></td></tr>
+        <tr><td>⑨ 在⑦基础上剔 1 条题目不唯一</td><td class="n">724</td><td class="n">605</td><td class="n">83.6%</td><td>去掉出题缺陷题</td></tr>
+        <tr><td><b>⑩ 剔除全部 85 条疑义</b></td><td class="n">640</td><td class="n">538</td><td class="n"><b>84.1%</b></td><td><b>只留金标经得起核对的题</b>；最干净，也最窄</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p><strong>为什么⑥⑦⑧都挤在 83%–85%：</strong>因为 cg 的 123 条里只有 12 条（1 对 + 3 部分对 + 8 无法判）可能改变结果；其余 111 条里 102 条金标站得住、agent 确实错，9 条金标查无实据但 agent 也是弃答或答偏，无论怎么算都还是错。</p>
+    <p><b>cg 的复核只把区间从「未知」收窄到 1.7 个百分点，没有推翻结论。</b></p>
+  </div>
+
+  <div class="warn note">
+    <p><strong>⑥ 是下界，不是中位数。</strong>83.0% 假设 cg 的 123 条里 agent 全部答错。这个假设经复核后基本成立——111 条 agent 都没答对，其中 102 条金标站得住、9 条金标查无实据——但仍有 12 条存在上行空间。</p>
+    <p>所以对外引用时建议写 <b>「83.0%–84.7%，中点 83.6%」</b>，而不是单写 83.0% 或 84.7%。</p>
+  </div>
+
+  <h3 style="margin-top:40px">剔除全部疑义后：640 题，正确率 84.1%</h3>
+  <p>把「有疑义」的样本全部剔掉——金标被推翻的、金标查无实据的、双方都无法判的、出题缺陷的，一条不留——剩下 <b>640 题</b>。这是最干净的一副牌：每一题的金标都经得起语料核对。</p>
+
+  <div class="tw">
+    <table>
+      <caption>口径⑩的构成</caption>
+      <thead><tr><th>剔除</th><th class="n">剩余题数</th><th class="n">答对</th><th class="n">错题</th><th class="n">正确率</th></tr></thead>
+      <tbody>
+        <tr><td>85 条（cc 64 + cg 21）</td><td class="n">640</td><td class="n">538</td><td class="n">102</td><td class="n"><b>84.1%</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p style="margin-top:24px"><b>题型 × 领域：640 题的正确率分布。</b></p>
+
+  <div class="tw">
+    <table>
+      <caption>剔除全部疑义后的题型 × 领域正确率</caption>
+      <thead>
+        <tr><th>题型</th><th class="n">Finance</th><th class="n">Healthcare</th><th class="n">Manufacturing</th><th class="n">Technology</th><th class="n">合计</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>拒答</td><td class="n">95.2%</td><td class="n">87.5%</td><td class="n">87.8%</td><td class="n">88.5%</td><td class="n">89.2%</td></tr>
+        <tr><td><b>知识更新</b></td><td class="n">73.3%</td><td class="n"><b>42.9%</b></td><td class="n">44.4%</td><td class="n">76.0%</td><td class="n"><b>63.2%</b></td></tr>
+        <tr><td>多跳</td><td class="n">90.7%</td><td class="n">83.7%</td><td class="n">86.0%</td><td class="n">79.5%</td><td class="n">85.1%</td></tr>
+        <tr><td>时间推理</td><td class="n">88.1%</td><td class="n">82.9%</td><td class="n">89.5%</td><td class="n"><b>100%</b></td><td class="n">89.7%</td></tr>
+        <tr><td>术语歧义</td><td class="n">90.6%</td><td class="n">100%</td><td class="n">88.9%</td><td class="n">89.7%</td><td class="n">90.4%</td></tr>
+        <tr><td>隐式意图</td><td class="n">80.0%</td><td class="n">100%</td><td class="n">50.0%</td><td class="n">80.8%</td><td class="n">78.7%</td></tr>
+        <tr class="total"><td>合计</td><td class="n">86.9%</td><td class="n">80.6%</td><td class="n">81.7%</td><td class="n">85.7%</td><td class="n"><b>84.1%</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="warn note">
+    <p><strong>塌陷点只有一个：知识更新，63.2%。</strong>87 题错 32 题，比其他题型低 15–27 个百分点。Healthcare 的 14 题里错 8 题（42.9%），是全表最差的一格。这是检索瓶颈——知识更新题要求判断「最新状态」，agent 的失败模式是答旧状态。</p>
+    <p>Technology 的时间推理 30 题全对，是唯一一个零错的格子；Technology 的知识更新 25 题错 6 题（76.0%），也是四域里最好的。</p>
+  </div>
+
+  <div class="note">
+    <p><strong>102 条错题是下一步要改的目标。</strong>按题型拆：知识更新 32、多跳 25、时间推理 15、拒答 13、隐式意图 10、术语歧义 7。其中 8 条是超时（工程问题，不是能力问题）。知识更新这一块定位为检索瓶颈，暂不动。</p>
+    <p><strong>那 85 条题目问题不用改。</strong>它们的根因是知识不维护——先定答案再构造语料，白熊效应下反而编成了新答案。生产环境谁会不维护知识？所以这 85 条是「不维护就会这样」的证明，不是基准的致命伤。</p>
+  </div>
+
+  <div class="note">
+    <p><strong>这个口径的边界：</strong>剔掉的 85 条里 64 条是 agent 答对但金标有问题，扔掉等于承认「这些题我们不判了」。所以 84.1% 不是「agent 的真实水平」，而是<b>「在这 640 道金标站得住的题上，agent 的正确率」</b>。</p>
+    <p>两个数字一起给才完整：<b>全量 725 题上是 83.0%–84.7%；只算金标经得起核对的 640 题，是 84.1%。</b></p>
+  </div>
+</section>
+
+<!-- 7 -->
+<section id="s7">
+  <div class="sec-head">
+    <div class="sec-num">07 / GOLD AUDIT</div>
+    <h2>金标审计：85 道题有问题或无法验证，其中 64 道 agent 答对了</h2>
+    <p class="sec-sub">这是本轮最重要的发现：<b>金标错和 agent 对是两件事</b>。85 条里，64 条 agent 对、3 条部分对、8 条双方都无法判、9 条 agent 错但金标查无实据、1 条出题缺陷。</p>
+  </div>
+
+  <div class="note">
+    <p><strong>85 条的根因不是出题人不用心，是知识不维护。</strong>基准出题时先定答案、再构造语料——越提醒「别写偏」，白熊效应下落笔反而把「别的」写成了更明确的 decision 语言，于是金标和语料各说各话（机制见 9.4）。</p>
+    <p>这个定性也意味着：<b>它不构成对基准的致命指控</b>。生产环境里谁会不维护知识？所以这 85 条更像是一份「不维护就会这样」的证明——基准恰好测出了这个失败模式。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>85 条金标有问题或无法验证的构成</caption>
+      <thead>
+        <tr><th>来源</th><th class="n">条数</th><th>金标</th><th>agent</th><th>该怎么算</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>cc 复核</td><td class="n">63</td><td>错</td><td><b>对</b></td><td>应改判为对</td></tr>
+        <tr><td>cc 复核（出题缺陷）</td><td class="n">1</td><td>双日期不唯一</td><td>—</td><td>应剔除</td></tr>
+        <tr><td>cg 复核</td><td class="n">1</td><td>错</td><td><b>对</b></td><td>应改判为对</td></tr>
+        <tr><td>cg 复核</td><td class="n">3</td><td>错</td><td>部分对（提到了金标的值，但没作为主答案）</td><td>算对 / 算错都可辩，报告两种口径都给了</td></tr>
+        <tr><td>cg 复核</td><td class="n">8</td><td>无法判</td><td>无法判定</td><td>金标和语料都对不上，题目有缺陷</td></tr>
+        <tr><td>cg 复核</td><td class="n">9</td><td><b>查无实据</b></td><td>错</td><td>金标关键内容在 12 万条语料里找不到出处；存疑，不并入 agent 错的确定部分</td></tr>
+        <tr class="total"><td>合计</td><td class="n">85</td><td>—</td><td>64 对 / 3 部分 / 8 无法判 / 9 查无实据 / 1 出题缺陷</td><td>—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p><strong>85 条和 186 条差在哪里。</strong>早前的版本把 cg 的 111 条「agent 错」整体当成了「金标也错」，得出 186 条。逐条核对金标出处后发现：这 111 条里 94 条的金标在语料里有明确支撑（agent 是真错），只有 9 条属于「语料里查不到金标出处」。所以真正该记在基准账上的，是 64 + 3 + 8 + 9 + 1 = 85 条。</p>
+  </div>
+
+  <h3>金标错的三种形态</h3>
+  <div class="tw">
+    <table>
+      <thead>
+        <tr><th>形态</th><th class="n">典型题数</th><th>机制</th><th>最严重题型</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>金标停在 proposal / 变更前状态</b></td>
+          <td class="n">≥25</td>
+          <td>语料后来有 decision 语言推翻，金标没跟上</td>
+          <td>知识更新（cc 的 17 条全部是这形态）</td>
+        </tr>
+        <tr>
+          <td><b>金标取错 phase</b></td>
+          <td class="n">已确认 3</td>
+          <td>同一表述存在于别的阶段，不是被问的那个</td>
+          <td>多跳、时间推理（未做全量统计，仅确认个案）</td>
+        </tr>
+        <tr>
+          <td><b>金标说「无信息」但语料有</b></td>
+          <td class="n">19（cc 内）</td>
+          <td>金标漏检，agent 直接引原文作答</td>
+          <td>拒答</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>四个可直接核对的案例</h3>
+
+  <details class="case">
+    <summary>
+      <span class="tag">Manufacturing · knowledge_update_17</span>
+      <span class="qt">知识更新</span>
+      <span>金标复述的是 proposal，agent 报的是同日 19:38 的 decision</span>
+    </summary>
+    <div class="body">
+      <dl>
+        <dt>问题</dt><dd>What is the current approach for reconciling the workflow on Line 3?</dd>
+        <dt>金标</dt><dd>以 maintenance raw window exports 和 operator notes 为锚，再把 MES events 对齐</dd>
+        <dt>agent</dt><dd>用 supervisor notes 作为 Line 3 对账的临时锚点，直到 Maintenance 补齐缺失条目</dd>
+        <dt>语料</dt><dd>金标源是 User_6 在 07-31 16:50 的 <b>「Propose different anchor: …」</b>（提议）；User_3 同日 19:38 发 DECISION_POINT：「Use supervisor notes as temporary anchor for Line 3 reconciliation.」（决定）</dd>
+        <dt>judge2 判定</dt><dd><span class="chip c-cc">conflict_corpus</span> 理由原文：「gold answer reproduces User_6's <b>proposal</b>… the agent reports the <b>decision</b> User_3 issued later that same day」</dd>
+      </dl>
+    </div>
+  </details>
+
+  <details class="case">
+    <summary>
+      <span class="tag">Healthcare · multi_hop_15</span>
+      <span class="qt">多跳</span>
+      <span>金标源在另一个 phase，问题问的不是那个阶段</span>
+    </summary>
+    <div class="body">
+      <dl>
+        <dt>问题</dt><dd>What approach was decided to address OTC gaps in the <b>Reconciliation Workflow Design</b> phase?</dd>
+        <dt>金标</dt><dd>Keep fields flexible, not vague.</dd>
+        <dt>agent</dt><dd>block on verify—not full freeze：出院阻塞到 pharmacy 核验通过，OTC / late-FHIR 缺口挂 hard flag</dd>
+        <dt>语料</dt><dd>金标源 Msg_28650（07-15）属于 <b>EHR Integration Development</b> phase，不是问题所问的阶段；agent 引的 Msg_3579（07-31）和 Msg_26806（08-06）都在问题所问的 phase 内</dd>
+        <dt>judge2 判定</dt><dd><span class="chip c-cc">conflict_corpus</span> 理由原文：「belongs to a different phase than the one asked about」</dd>
+      </dl>
+    </div>
+  </details>
+
+  <details class="case">
+    <summary>
+      <span class="tag">Manufacturing · abstention_21</span>
+      <span class="qt">拒答</span>
+      <span>金标说「无信息」，语料一句话点名 Priya</span>
+    </summary>
+    <div class="body">
+      <dl>
+        <dt>问题</dt><dd>What is the name of the CMMS owner assigned for the noon interval?</dd>
+        <dt>金标</dt><dd>There is no information available in the conversation.</dd>
+        <dt>agent</dt><dd>Priya（Msg_27125：Priya owns the interval pull by noon）</dd>
+        <dt>语料</dt><dd>Msg_27125（07-27 15:12:57，DECISION_POINT）逐字为「Priya owns the interval pull by noon」；Msg_26721、Msg_27027 佐证</dd>
+        <dt>judge2 判定</dt><dd><span class="chip c-cc">conflict_corpus</span> 理由原文：「Earlier messages show the owner was still unnamed, but the later decision language resolves it.」</dd>
+      </dl>
+    </div>
+  </details>
+
+  <details class="case">
+    <summary>
+      <span class="tag">Finance · knowledge_update_15</span>
+      <span class="qt">知识更新</span>
+      <span>反向案例：金标是 07-21 修订版，agent 报的是 07-04 旧版——两边都不是当前状态</span>
+    </summary>
+    <div class="body">
+      <dl>
+        <dt>问题</dt><dd>What is the current approach for handling the freeze in the reporting framework development?</dd>
+        <dt>金标</dt><dd>只冻结 template layout rules，source-mapping 字段走单独 exception track，等三方验证</dd>
+        <dt>agent</dt><dd>立即冻结整个 reporting framework，后续只允许「controlled revision」，需 Finance Ops 批准</dd>
+        <dt>语料</dt><dd>金标源 Msg_7451（07-21）明确写「the original freeze rule no longer holds」；agent 引的是 07-04 至 07-06 的消息，早于修订 17 天</dd>
+        <dt>judge2 判定</dt><dd><span class="chip c-cg">conflict_gold</span> 理由原文：「The agent reports the July 4–6 state… The gold reflects the later revision of 2025-07-21」<br><b>这条判得对</b>：金标是 07-21 修订版、有明确出处；agent 答的是 17 天前的旧状态，属于 agent 答错。</dd>
+      </dl>
+    </div>
+  </details>
+</section>
+
+<!-- 8 -->
+<section id="s8">
+  <div class="sec-head">
+    <div class="sec-num">08 / ERROR ANALYSIS</div>
+    <h2>cg 的 111 条 agent 错在哪：五种形态</h2>
+    <p class="sec-sub">cg 判「agent 错」这个结论站得住：111 条里 94 条金标有明确语料出处、agent 确实答错，8 条是超时，只有 9 条属于「金标查无实据」。真正漏掉的是 4 条——它们本该进 cc，被判分器归到了这里。</p>
+  </div>
+
+  <div class="tw">
+    <table>
+      <caption>cc 与 cg 的对照：两档的 agent 表现差了两个数量级，但原因不同</caption>
+      <thead>
+        <tr><th>维度</th><th class="n">cc（64 条）</th><th class="n">cg（123 条）</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>金标有问题或无法验证</td><td class="n">64</td><td class="n">21</td></tr>
+        <tr><td>agent 对</td><td class="n">63（98.4%）</td><td class="n">1（0.8%）</td></tr>
+        <tr><td>agent 部分对</td><td class="n">0</td><td class="n">3（2.4%）</td></tr>
+        <tr><td><b>agent 错（金标站得住）</b></td><td class="n">0</td><td class="n"><b>102（82.9%）</b></td></tr>
+        <tr><td>金标查无实据</td><td class="n">0</td><td class="n">9（7.3%）</td></tr>
+        <tr><td>无法判定</td><td class="n">1（1.6%）</td><td class="n">8（6.5%）</td></tr>
+        <tr class="total"><td>判分器这一档判得对不对</td><td class="n"><b>100%</b>（判「题目有问题」判对）</td><td class="n"><b>82.9%</b>（判「agent 错」判对）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tw" style="margin-top:20px">
+    <table>
+      <caption>111 条 agent 错的形态分布（按错误性质归类，部分条目可归入多类，取最主要的一类）。这 111 条里 102 条金标站得住，9 条金标查无实据</caption>
+      <thead>
+        <tr><th>形态</th><th class="n">条数</th><th>表现</th><th>性质</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><b>技术失败</b></td><td class="n">10</td>
+          <td>输出 <code>DSH_TIMEOUT(600s)</code>，零答案</td>
+          <td>工程问题，不是能力问题</td>
+        </tr>
+        <tr>
+          <td><b>弃答但语料有答案</b></td><td class="n">18</td>
+          <td>回答「No information available」，但语料里有明确段落</td>
+          <td>检索没翻到，误判为不存在</td>
+        </tr>
+        <tr>
+          <td><b>答了被推翻的旧状态</b></td><td class="n">8</td>
+          <td>锚在早期 proposal，没跟上后来的 decision</td>
+          <td>时间锚点太早</td>
+        </tr>
+        <tr>
+          <td><b>日期 / 锚点算错</b></td><td class="n">约 30</td>
+          <td>「by Friday」「tomorrow」换算成错误日期，或锚在旧消息上</td>
+          <td>相对时间解析不稳</td>
+        </tr>
+        <tr>
+          <td><b>答了不同对象 / 第三版本</b></td><td class="n">约 45</td>
+          <td>答的是相关但不同的决策，或同一决策的第三个版本</td>
+          <td>问题定位偏了</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="bad note">
+    <p><strong>最值得注意的一组：拒答题的双向失守。</strong>cc 里 19 条拒答题 agent 全部答对（金标说无信息，语料其实有）；cg 里 13 条拒答题 agent 全部答错（金标说无信息，语料真的没有，agent 硬编了一个）。</p>
+    <p>这说明 agent 对「语料里有没有」的判断<b>不是单向偏差，是双向不稳</b>——有时该答不答，有时不该答硬答。这比单一方向的偏差更难修，因为它不是靠调阈值能解决的。</p>
+  </div>
+
+  <div class="warn note">
+    <p><strong>8 条无法判的性质：</strong>不是 agent 答得模糊，而是<b>金标和语料都对不上</b>——金标给的值在语料里找不到出处，agent 的答案也没有明确支撑。这 8 条本质上是题目本身有缺陷，无论 agent 怎么答都判不了。</p>
+  </div>
+</section>
+
+<!-- 9 -->
+<section id="s9">
+  <div class="sec-head">
+    <div class="sec-num">09 / JUDGE PERFORMANCE</div>
+    <h2>判分器表现：三分类准确率 97.1%，漏判 4 条</h2>
+    <p class="sec-sub">前面几章都在说「判分器给出的 74.2% 不能直接用」。这一章把话说全：判分器的判断本身很准，问题只在计分出口。</p>
+  </div>
+
+  <h3>9.1 它其实一直在做三分类</h3>
+  <p>judge2 的设计目标是二分类（agent 答对 / 答错），但把四档按「它实际想表达什么」重新归并，会发现它一直在输出三个出口：</p>
+  <div class="tw">
+    <table>
+      <caption>三个出口 × 复核结论</caption>
+      <thead>
+        <tr><th class="n">出口</th><th>档位</th><th class="n">条数</th><th>判分器在说什么</th><th>复核后实际是什么</th><th class="n">准确率</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="n">一</td><td><span class="chip c-exact">exact</span> <span class="chip c-compat">compatible</span></td>
+          <td class="n">538</td><td>agent 答对了</td>
+          <td>本轮未复核（只核了非对样本）</td><td class="n">—</td>
+        </tr>
+        <tr>
+          <td class="n">二</td><td><span class="chip c-cg">conflict_gold</span></td>
+          <td class="n">123</td><td>agent 答错了</td>
+          <td>102 条确实错（金标站得住）· 9 条金标查无实据 · 4 条其实对 · 8 条是题目缺陷</td><td class="n">82.9%</td>
+        </tr>
+        <tr>
+          <td class="n">三</td><td><span class="chip c-cc">conflict_corpus</span></td>
+          <td class="n">64</td><td><b>题目有问题，agent 没错</b></td>
+          <td>63 条题目确有问题 · 1 条出题缺陷（双日期）</td><td class="n"><b>100%</b></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p><strong>第三个出口是判分器最有价值的设计。</strong>它主动去验证「金标站不站得住」，而且门槛设得很严（三条件全满足才判）。64 次判定里 64 次方向都对，把出题环节的毛病揪了出来。</p>
+    <p>如果没有这个出口，这 64 道有问题的题会全部被算成 agent 答错，正确率会被低估 8.8 个百分点，而且没人知道为什么。</p>
+  </div>
+
+  <h3>9.2 整体准确率：97.1%</h3>
+  <div class="tw">
+    <table>
+      <caption>三种算法，取决于「8 条题目缺陷」和「9 条金标查无实据」怎么算</caption>
+      <thead>
+        <tr><th>口径</th><th class="n">判对</th><th class="n">分母</th><th class="n">准确率</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>严格三分类（档位完全正确）</td><td class="n">704</td><td class="n">725</td><td class="n"><b>97.1%</b></td>
+          <td>538 判对 + 64 判题目问题 + 102 判 agent 错</td>
+        </tr>
+        <tr>
+          <td>宽口径（大方向对即可）</td><td class="n">712</td><td class="n">725</td><td class="n">98.2%</td>
+          <td>再加上 8 条「是题目问题、但归到了 agent 错」——方向对，只是归错档</td>
+        </tr>
+        <tr>
+          <td>只看已复核的 187 条</td><td class="n">166</td><td class="n">187</td><td class="n">88.8%</td>
+          <td>不含未复核的 538 条，是最保守的算法</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:14px">三个数字都指向同一个结论：<b>判分器的分类能力没问题，问题在出口。</b>97.1% 这个数字是在「538 条判对的样本无误差」的假设下算出来的——这 538 条本轮没有复核，是这份报告的一个已知缺口（见 9.5）。另有 9 条「金标查无实据」按严格口径计为判错，如果金标其实有语料外的依据，准确率会回到 98.3%。</p>
+
+  <h3>9.3 真正的漏判只有 4 条</h3>
+  <p>123 条 cg 里，有 4 条 agent 其实答对了或基本答对，本该进 cc 却被归到了 cg。这是判分器唯一的实质性漏判：</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>题号</th><th>题型</th><th>复核结论</th><th>为什么该进 cc</th></tr></thead>
+      <tbody>
+        <tr><td><code>Finance_multi_hop_14</code></td><td>多跳</td><td><b>agent 全对</b></td><td>agent 答案与语料一致，金标取的是另一个版本的数值</td></tr>
+        <tr><td><code>Healthcare_multi_hop_22</code></td><td>多跳</td><td>部分对</td><td>agent 提到了金标的值，但没作为主答案</td></tr>
+        <tr><td><code>Healthcare_temporal_31</code></td><td>时间推理</td><td>部分对</td><td>同上</td></tr>
+        <tr><td><code>Technology_temporal_13</code></td><td>时间推理</td><td>部分对</td><td>同上</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note">
+    <p><b>漏判率：4 / 725 = 0.55%</b>；在 187 条非对样本里是 <b>4 / 187 = 2.1%</b>。</p>
+    <p>这 4 条为什么会被漏？共同点是「agent 的答案里同时出现了正确和错误的成分」——判分器看到与金标矛盾的部分就归到了 cg，没有进一步检查「矛盾的那部分是不是主答案」。属于边界判定偏保守，不是系统性错误。</p>
+  </div>
+
+  <h3>9.4 为什么 cc 会判出这么多题目问题：一个假说</h3>
+  <p>64 条 cc 意味着 64 道题的金标站不住脚。这个比例（8.8%）不算低，值得问一句：这些金标是怎么错的？</p>
+  <p>一个可能的解释是出题流程本身。如果流程是<b>「先定答案，再构造或筛选语料」</b>，那么出题人心里已经有一个预设答案 X，接下来的工作是围绕 X 组织材料。这个过程里有一个已知的认知陷阱：</p>
+  <div class="warn note">
+    <p><strong>白熊效应（ironic process theory，Wegner 1987）：</strong>刻意不去想某个念头，反而会让这个念头更频繁地出现。放在出题上——出题人越是提醒自己「语料要围绕 X 写、不要写成别的」，在落笔时反而更容易把「别的」写进去。</p>
+    <p>结果是：<b>金标是 X，语料里却出现了 Y，而且 Y 往往被写成了更明确的 decision 语言。</b></p>
+  </div>
+  <p style="margin-top:14px">这个假说和实测数据对得上：cc 的 63 条里，金标大量停在 proposal 阶段（<code>Propose different anchor:</code>、<code>should we</code>、<code>tentative</code>），而语料里有明确的 decision 语言（<code>Final:</code>、<code>Locking X</code>、DECISION_POINT 标记）。<b>像是「想好了要写 proposal，写的时候却把 decision 写进去了」。</b></p>
+  <p>知识更新的 17 条 cc 全部是这一形态，是最集中的证据。</p>
+  <div class="warn note">
+    <p><b>必须说明：这是假说，不是结论。</b>出题过程不在本次复核范围内，无法直接验证。它能解释数据，但也可能有别的解释（比如金标是从早期消息里抽取的，抽取时没往后看）。写在这里是因为它指向一个可操作的改进方向：<b>出题时应该先看完整条时间线再定答案，而不是先定答案再找材料。</b></p>
+  </div>
+
+  <h3>9.5 这份复核本身的瑕疵：主持者自查</h3>
+  <p>这一节必须写，否则前面所有结论都会被质疑。</p>
+  <div class="bad note">
+    <p><strong>复核者就是实验的主持方。</strong>这 187 条不是交给独立第三方核的，是我们自己——也就是设计和运行这套评测的同一方——把题目一条条摊开、对着原始语料看的。</p>
+    <p>这构成一个明确的利益冲突：<b>复核者有动机把不利结果解释成「题目有问题」，而不是「agent 答错了」。</b>说句难听的，运动员兼裁判。</p>
+  </div>
+  <p style="margin-top:14px">为什么还是这么做，以及做了什么来限制这个风险：</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>问题</th><th>处理方式</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>没有独立第三方</td>
+          <td>把每条的判定依据全部摊开：题号、问题、金标、agent 答案、判分器理由、语料原文。任何人都可以拿底稿重核，不同意就指出来</td>
+        </tr>
+        <tr>
+          <td>复核者有偏向</td>
+          <td>有争议的不硬判：3 条部分对、8 条无法判单独列出，不算进任何一边；最终用上下界把不确定性框住，而不是给一个确定数字</td>
+        </tr>
+        <tr>
+          <td>方法不精巧</td>
+          <td>承认这是笨办法——不是设计了一个更聪明的判据，是把 187 条一条条看完。靠的是算力和时间，不是方法论上的优雅</td>
+        </tr>
+        <tr>
+          <td>538 条判对的没核</td>
+          <td>本轮只核了被判为「不对」的样本。如果判分器把答错的判成了对，本报告发现不了。这是明确的缺口</td>
+        </tr>
+        <tr>
+          <td><b>本报告自己就出过错</b></td>
+          <td>上一版把 cg 的 111 条「agent 错」整体记成了「金标也错」，把金标问题高估到 186 条。逐条核对金标出处后修正为 85 条。这个错误本身就是「主持者自查」风险的活例证——复核者一旦先有了「基准有问题」的预期，很容易把「agent 错」顺手记成「金标错」</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="note">
+    <p><strong>一句话说清楚这个复核的性质：</strong>它不是「独立验证」，是「主持方把牌摊开自己查了一遍」。价值在于覆盖全量、每条可追溯；局限在于没有外部视角。</p>
+    <p>如果要让它变成真正可信的结论，下一步应该是：<b>把底稿交给没参与过这套评测的人，随机抽 30 条重核，看结论能不能对上。</b>这件事还没做。</p>
+  </div>
+
+  <h3>9.6 判分器表现的小结</h3>
+  <div class="cols">
+    <div class="card">
+      <h3>做得对的</h3>
+      <ul>
+        <li>三分类准确率 97.1%，判「题目有问题」的 64 次全部方向正确</li>
+        <li>判「agent 错」的 123 次里 102 次正确——且这 102 条的金标都经得起逐字核对</li>
+        <li>cc 的三条件门槛设计得严，没有出现大面积误报</li>
+        <li>在没有独立验证的条件下，主动去查金标，这是判分器最有价值的设计</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>做得不够的</h3>
+      <ul>
+        <li>出口只有两个，第三个出口（题目有问题）没接到计分上</li>
+        <li>漏判 4 条：agent 答案里正确和错误成分并存时，只看矛盾部分</li>
+        <li>8 条题目缺陷被归进 agent 错，性质混淆</li>
+        <li>9 条金标查无实据时按「默认信金标」判了 agent 错，没有标记为「无法验证」</li>
+        <li>538 条判对的样本没有反向抽查机制</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- 10 -->
+<section id="s10">
+  <div class="sec-head">
+    <div class="sec-num">10 / CONCLUSION</div>
+    <h2>结论与下一步</h2>
+  </div>
+
+  <div class="cols">
+    <div class="card">
+      <h3>三个可以定下来的结论</h3>
+      <ul>
+        <li><b>判分器是准的。</b>三分类准确率 97.1%，判「题目有问题」的 64 次全部方向正确，漏判只有 4 条。它不是判错了，是第三个出口没接到计分上。</li>
+        <li><b>agent 真实正确率 83.0%–84.7%，中点 83.6%。</b>不是 74.2%。但上行空间只有 1.7 个百分点——cg 复核没有推翻结论，只是把区间收窄了。</li>
+        <li><b>基准有 85 条金标有问题或无法验证，占 11.7%。</b>其中 64 条 agent 答对了，9 条 agent 也错但金标查无实据，8 条双方都无法判，3 条部分对，1 条出题缺陷。<b>金标错不等于 agent 对</b>，这两件事必须分开说。</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>要改的其实只有一处</h3>
+      <ul>
+        <li><b>给 cc 一个独立出口。</b>它判的是「题目有问题」，不该计入 agent 错。改成 <code>gold_defect</code> 一类，一行代码。</li>
+        <li><b>效果：</b>正确率 74.2% → 83.0%，同时基准问题被单独统计出来，两个账分开记。</li>
+        <li><b>cg 拆档是建议，不是必须。</b>cg 的 102 条「金标对、agent 错」留在 agent 错里判得对，只是 8 条题目缺陷和 9 条金标查无实据不该混进去。</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="note">
+    <p><strong>一句话总结：</strong>判分器立了功——它自己揪出了 64 道有问题的题，又准确判出 102 条 agent 真错的答案，只有 4 条漏网。<b>错的是计分出口，不是判分器。</b>把这两个账分开记，才能同时看到两件事：agent 真实水平约 83%，而这份基准有 11.7% 的金标有问题或无法验证。</p>
+  </div>
+
+  <h3>还没做的</h3>
+  <div class="tw">
+    <table>
+      <thead>
+        <tr><th>事项</th><th>状态</th><th>说明</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>4 道知识更新类的基准歧义题整理成 issue</td><td>待办</td><td>提交官方，附原文对比</td></tr>
+        <tr><td>3 道双日期题 + 4 道「差 1 天」题作为金标不唯一证据</td><td>待办</td><td>temporal_13 / 14 / 24 等</td></tr>
+        <tr><td>给判据加「时间优先级规则」</td><td>待办</td><td>金标源是 proposal 且后期有 decision 推翻时判 cg 而非 cc</td></tr>
+        <tr><td>给检索加 <code>latest_decisions</code> 一路</td><td>待办</td><td>直接检索决策点，缓解「锚太早」</td></tr>
+        <tr><td>拒答题双向失守专项</td><td>待办</td><td>13 条硬编答案 + 19 条误判不存在</td></tr>
+        <tr><td>10 条超时排查</td><td>待办</td><td>纯工程问题，有确定性解法</td></tr>
+        <tr><td>把 187 条底稿交给没参与评测的人抽 30 条重核</td><td><b>待办（最重要）</b></td><td>解决「主持者自查」的利益冲突，是这份报告可信度的最后一块拼图</td></tr>
+        <tr><td>抽查 538 条判「对」的样本</td><td>待办</td><td>本轮只核了非对样本，判对的有没有误判，目前不知道</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 11 -->
+<section id="s11">
+  <div class="sec-head">
+    <div class="sec-num">APPENDIX</div>
+    <h2>附：术语表与方法说明</h2>
+  </div>
+
+  <h3>术语表</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>术语</th><th>含义</th></tr></thead>
+      <tbody>
+        <tr><td><b>金标</b>（gold answer）</td><td>数据集给出的参考答案，即判定 agent 是否答对的基准</td></tr>
+        <tr><td><b>judge1</b></td><td>GroupMemBench 基准自带的原判分器。只比对 agent 答案和金标的语义是否一致，输出对 / 错二分类，本报告里算出 69.1%</td></tr>
+        <tr><td><b>judge2</b></td><td>我们自研的判分器。在 judge1 基础上引入语料证据集合，判断「这束证据整体支持 agent 还是支持金标」，输出四档，本报告里算出 74.2%（计分仍按二分类）</td></tr>
+        <tr><td><b>agent</b></td><td>被评测的智能体，本报告中被测对象是 DSH 记忆智能体（<code>dsh-linghun-memory</code>）</td></tr>
+        <tr><td><b>语料</b>（corpus）</td><td>出题所依据的原始多轮对话记录，每个领域 3 万条，四个领域共 12 万条</td></tr>
+        <tr><td><b>msg_node</b></td><td>语料中每条消息的唯一标识，格式为 <code>Msg_XXXXX</code>，agent 引用证据时使用</td></tr>
+        <tr><td><b>DECISION_POINT</b></td><td>语料中标记为「决策点」的消息类型，代表团队在这一刻做出了最终决定</td></tr>
+        <tr><td><b>proposal / decision 语言</b></td><td>语料里区分消息性质的两类措辞。proposal 是早期提议（「Proposal:」「should we」「tentative」），decision 是最终决定（「Final:」「Locking X」「Decided on X」）。判据规定 decision 优先</td></tr>
+        <tr><td><b>phase</b></td><td>项目阶段。同一句表述可能出现在不同阶段，答对内容但答错阶段也算错</td></tr>
+        <tr><td><b>BM25</b></td><td>一种基于词频的文本检索算法，本报告用它从 12 万条语料里定位金标和 agent 答案的出处</td></tr>
+        <tr><td><b>DSH_TIMEOUT</b></td><td>agent 单题响应超时（600 秒）的标记。出现这个标记的样本 agent 没有输出答案，计为错，但属于工程问题</td></tr>
+        <tr><td><b>cc / cg</b></td><td>judge2 的两个冲突档位，定义见第一章。cc = 语料支持 agent（金标错），cg = 语料支持金标（agent 错）</td></tr>
+        <tr><td><b>白熊效应</b>（ironic process theory）</td><td>Wegner 1987 提出的心理机制：刻意压抑某个念头反而让它更频繁出现。本报告用它作为一个假说，解释金标为何会与语料不一致</td></tr>
+        <tr><td><b>金标查无实据</b></td><td>金标的关键内容在 12 万条语料里找不到出处，也无法被语料反驳。judge2 遇此情形按「默认信金标」判 agent 错；本报告将其单列为存疑档，共 9 条</td></tr>
+        <tr><td><b>下界 / 中点 / 上界</b></td><td>对 cg 里无法确定部分的三种处理方式，分别假设「全错」「已确认对的算对」「连无法判的也算对」</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>复核方法</h3>
+  <p>本报告的 187 条结论不是重跑判分器得出的，是人工逐条复核。每条样本的复核依据有四类材料：</p>
+  <div class="tw">
+    <table>
+      <thead><tr><th>材料</th><th>内容</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td>judge2 判定理由</td><td>判分器给出的完整推理文本</td><td>看判分器自己认为语料支持谁</td></tr>
+        <tr><td>agent 引用原文</td><td>agent 答案中引用的 msg_node 及其原文</td><td>核实 agent 的证据是否真实存在</td></tr>
+        <tr><td>金标溯源段落</td><td>用 BM25 检索金标文本找到的原始消息</td><td>核实金标是否有出处、出处在哪个阶段</td></tr>
+        <tr><td>问题阶段锚</td><td>问题所问的具体 phase 名称</td><td>判断金标源是否属于被问的那个阶段</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:14px">判定标准是二维的：<b>金标是否站得住</b>（有无明确段落支撑、是否属于被问阶段、是否被后期 decision 推翻）× <b>agent 是否答对</b>（是否给出金标的值、是否给出语料支持的另一个值、是否弃答）。两个维度交叉得出 A（agent 对）/ B（agent 错）/ C（部分对）/ D（无法判）四类。</p>
+
+  <h3>数据与可复现性</h3>
+  <div class="tw">
+    <table>
+      <thead><tr><th>文件</th><th>内容</th></tr></thead>
+      <tbody>
+        <tr><td><code>results2/*.jsonl</code></td><td>24 个领域 × 题型文件，725 条原始评测结果，含 agent 答案、金标、judge1/judge2 判定与理由</td></tr>
+        <tr><td><code>scripts/judge2.py</code></td><td>判分器实现，四档定义在 67–83 行，计分规则在 335 行</td></tr>
+        <tr><td><code>cg_复核_20261103.md</code></td><td>cg 123 条逐条复核明细，含 qid、问题、金标、agent 答案、judge2 理由</td></tr>
+        <tr><td><code>judge2_存疑复核_20261103.md</code></td><td>cc 64 条逐条复核明细</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>本报告的局限</h3>
+  <div class="warn note">
+    <p><b>一、复核有主观成分。</b>「金标是否站得住」「agent 是否答对」都需要人判断，边界样本存在争议。本报告的做法是把有争议的 3 条部分对、8 条无法判单独列出，并用上下界把不确定性框住。</p>
+    <p><b>二、复核基于已有证据块，不是独立全语料检索。</b>复核使用的是 judge2 已经检索好的证据（agent 引用 + 三路 BM25），没有对 12 万条语料做穷举验证。理论上存在「金标源在语料里但四路证据都没检索到」的情况。</p>
+    <p><b>三、错误形态的归类是估算。</b>111 条的五种形态中，「日期算错」和「答了不同对象」两类有交叉，条数为估算值（约 30、约 45），其余三类为精确计数。</p>
+  </div>
+</section>
+
+</div>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>数据来源：GroupMemBench 725 题全量评测结果，24 个「领域 × 题型」文件</p>
+    <p>复核方法：逐条读取判分器理由、agent 引用原文、金标溯源段落，按「金标是否站得住 / agent 是否答对」两个维度判定</p>
+    <p>复核底稿：cc 64 条与 cg 123 条的逐条明细已单独存档，每条含题号、问题、金标、agent 答案、判分器理由</p>
+    <p>生成时间：2026-11-03</p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var opened=[];
+  window.addEventListener('beforeprint',function(){
+    opened=[];
+    document.querySelectorAll('details').forEach(function(d){
+      if(!d.open){opened.push(d);d.open=true;}
+    });
+  });
+  window.addEventListener('afterprint',function(){
+    opened.forEach(function(d){d.open=false;});
+    opened=[];
+  });
+})();
+</script>
+</body>
+</html>

@@ -3,65 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_IDENTITY, DEFAULT_JUDGMENT, DEFAULT_USER_CARD, ARCHITECTURE_PRIORITY, resolveIdentity } from "../identity.js";
 import { createMemoryLayout, parseWarm, renderWarmEntries, summarizeWarmForCold, truncateKeepHead, sortWarmByAccess, sortWarmForInject, touchWarmAccessText, findWarmEntryRef, replaceWarmEntryText, markWrongWarmEntryText, findNearDuplicateWarm } from "../memory.js";
 import { Config, NS, apply, inject, name, parseAssessment } from "../index.js";
-
-// ── identity.js ─────────────────────────────────────────────────────────
-test("identity: 默认灵魂卡包含收口者身份锚点", () => {
-  assert.ok(DEFAULT_IDENTITY.includes("认知主体"));
-  assert.ok(DEFAULT_IDENTITY.includes("收口者"));
-  assert.ok(DEFAULT_IDENTITY.includes("大模型供直觉"));
-  assert.ok(DEFAULT_IDENTITY.includes("实事求是"));
-  assert.ok(DEFAULT_IDENTITY.length > 200);
-});
-
-test("identity: 判断纪律包含六类边界", () => {
-  assert.ok(DEFAULT_JUDGMENT.includes("模糊概念"));
-  assert.ok(DEFAULT_JUDGMENT.includes("悖论"));
-  assert.ok(DEFAULT_JUDGMENT.includes("身份边界"));
-  assert.ok(DEFAULT_JUDGMENT.includes("能力边界"));
-  assert.ok(DEFAULT_JUDGMENT.includes("知识边界"));
-  assert.ok(DEFAULT_JUDGMENT.includes("伦理"));
-  assert.ok(DEFAULT_JUDGMENT.includes("抬高拒绝成本"));
-});
-
-test("identity: 用户卡其他栏默认带方法论种子（思渊六条）", () => {
-  assert.ok(DEFAULT_USER_CARD.includes("方法论种子"));
-  assert.ok(DEFAULT_USER_CARD.includes("毛选式"));
-  assert.ok(DEFAULT_USER_CARD.includes("科学方法论"));
-  assert.ok(DEFAULT_USER_CARD.includes("系统思维"));
-  assert.ok(DEFAULT_USER_CARD.includes("逻辑工具箱"));
-  assert.ok(DEFAULT_USER_CARD.includes("认知偏差"));
-  assert.ok(DEFAULT_USER_CARD.includes("贝叶斯更新"));
-  assert.ok(DEFAULT_USER_CARD.includes("相对真理"));
-});
-
-test("identity: 用户人设文件优先于配置，且架构层始终垫底", () => {
-  const userCard = "# 我的灵魂卡\n\n我是我自己写的人设。";
-  const merged = resolveIdentity({ fileText: userCard, configContent: "# 配置卡" });
-  assert.ok(merged.startsWith(userCard));
-  assert.ok(merged.includes(DEFAULT_IDENTITY));
-  assert.ok(!merged.includes("# 配置卡"));
-});
-
-test("identity: 无文件时使用配置内容，且架构层始终垫底", () => {
-  const merged = resolveIdentity({ fileText: "", configContent: "# 配置卡" });
-  assert.ok(merged.startsWith("# 配置卡"));
-  assert.ok(merged.includes(DEFAULT_IDENTITY));
-});
-
-test("identity: 文件与配置都空时回退默认卡", () => {
-  assert.equal(resolveIdentity({ fileText: "  \n", configContent: " " }), DEFAULT_IDENTITY);
-  assert.equal(resolveIdentity({}), DEFAULT_IDENTITY);
-});
-
-test("identity: 冲突时架构优先声明随合并注入", () => {
-  const merged = resolveIdentity({ fileText: "名字：小蓝\n性格：谨慎。\n" });
-  assert.ok(merged.includes(ARCHITECTURE_PRIORITY));
-  assert.ok(merged.indexOf("小蓝") < merged.indexOf("以认知架构为准"));
-  assert.ok(merged.indexOf("以认知架构为准") < merged.indexOf("认知主体"));
-});
 
 // ── memory.js 海马体布局 ────────────────────────────────────────────────
 function makeLayout() {
@@ -400,10 +343,6 @@ test("index: 默认模式只注册记忆 section（soul:linghun-memory，命名�
 
 test("index: 默认配置可解析且取默认值", () => {
   const parsed = Config(undefined);
-  assert.equal(parsed.identity.enabled, true);
-  assert.equal(parsed.identity.name, "");
-  assert.equal(parsed.identity.content, "");
-  assert.equal(parsed.judgment.enabled, true);
   assert.equal(parsed.memory.enabled, true);
   assert.equal(parsed.memory.injectMaxChars, 6000);
   assert.equal(parsed.memory.timeWeight, true);
@@ -494,33 +433,6 @@ test("conf: renderForInject 含低置信条目时附声明纪律说明", () => {
   assert.ok(out.includes("引用存疑记忆必须先声明不确定"));
   assert.ok(!out.includes("2026-11-15"), "注入不含 wrong 条目");
 });
-
-test("identity: 判断纪律含置信度声明（含翻转事实禁用）", () => {
-  assert.ok(DEFAULT_JUDGMENT.includes("置信度声明"));
-  assert.ok(DEFAULT_JUDGMENT.includes("已翻转"));
-  assert.ok(DEFAULT_JUDGMENT.includes("引用即失守"));
-});
-
-test("identity: 判断纪律不含针对评测形态的答题规则（如'背景题要拒答'）", () => {
-  assert.ok(!DEFAULT_JUDGMENT.includes("回答边界"), "不得注入评测形态的具体答题规则（作弊嫌疑）");
-  assert.ok(!DEFAULT_JUDGMENT.includes("背景题"), "不得把'背景题拒答'写进注入文本");
-  assert.ok(!DEFAULT_JUDGMENT.includes("把记得的细节倒出来反而是泄漏"));
-});
-
-test("identity: 判断纪律含 HHH 价值排序（诚实>友善>有用）", () => {
-  assert.ok(DEFAULT_JUDGMENT.includes("价值排序"));
-  assert.ok(DEFAULT_JUDGMENT.includes("HHH"));
-  assert.ok(DEFAULT_JUDGMENT.includes("诚实 > 友善 > 有用"));
-  assert.ok(DEFAULT_JUDGMENT.includes("不编造讨喜的答案"));
-});
-
-test("identity: HHH 含'有用性最常被翻转'防御（悖论给方案/诱导确认）", () => {
-  assert.ok(DEFAULT_JUDGMENT.includes("最常被翻转的是\"有用\""));
-  assert.ok(DEFAULT_JUDGMENT.includes("Help 占上风"));
-  assert.ok(DEFAULT_JUDGMENT.includes("诚实（承认无一致解）优先于有用（给方案）"));
-  assert.ok(DEFAULT_JUDGMENT.includes("诱导确认"));
-});
-
 
 // ── 组装模式（memory.assembler，v0.2.10）──────────────────────────────────
 test("index: memory.assembler 配置默认值（injectPath 空、label 带提取声明）", () => {
@@ -855,26 +767,11 @@ test("fix: 沉淀三本体分流——event→记忆本体 / fact high→知识�
     );
     await consolidated.execute({}, {});
   });
-  const memoryOnt = readFileSync(join(memDir, "memory_ontology.md"), "utf8");
+  const memoryOnt = readFileSync(join(memDir, "memory_timeline.md"), "utf8");
   const knowledgeOnt = readFileSync(join(memDir, "knowledge_ontology.md"), "utf8");
   const rules = readFileSync(join(memDir, "rules.md"), "utf8");
   assert.ok(memoryOnt.includes("金之杰 | 决定"), "event 进记忆本体档案（事件时间线）");
   assert.ok(knowledgeOnt.includes("新增列数 | 4"), "fact high 进知识本体档案（精确值）");
   assert.ok(rules.includes("登录校验"), "rule 进规则本体");
   assert.ok(readFileSync(warmFile, "utf8").trim() === "", "warm 全清");
-});
-
-// ── 判分身份职责（v0.3.4，并入 DEFAULT_JUDGMENT）─────────────────────────
-test("judgment: 判分身份职责并入 DEFAULT_JUDGMENT（架构身份层，非独立 section）", () => {
-  assert.ok(DEFAULT_JUDGMENT.includes("判分身份职责"));
-  assert.ok(DEFAULT_JUDGMENT.includes("口径一致"));
-  assert.ok(DEFAULT_JUDGMENT.includes("判据绑定来源"));
-  assert.ok(DEFAULT_JUDGMENT.includes("同题同标"));
-  assert.ok(DEFAULT_JUDGMENT.includes("判据说不出来处即停"));
-  // 职责只指路领域规则，不主动展开清单（省 token）
-  assert.ok(DEFAULT_JUDGMENT.includes("漂移信号清单与误杀锚点见判分领域规则"));
-  // 不再有大段言官纪律/进谏协议（v0.3.3 已移除）
-  assert.ok(!DEFAULT_JUDGMENT.includes("进谏协议"));
-  assert.ok(!DEFAULT_JUDGMENT.includes("CONFIRMED"));
-  assert.ok(!DEFAULT_JUDGMENT.includes("言官"));
 });

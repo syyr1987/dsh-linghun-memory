@@ -1,7 +1,7 @@
 {
   "name": "dsh-linghun-memory",
-  "version": "0.1.8",
-  "description": "灵魂（Linghun）记忆体方案——收口者灵魂卡 + 记忆完全本体化 + 目标系统（goal.js）一整套（独立于原 dsh-linghun 的两条线）：写侧结构化三型条目（event 记忆本体 / fact 知识本体 / rule 规则本体）+ 目标信号合并与 Bridge 触发词（belief 价值观/底线收录）；读侧 warm 按 kind 分组原生渲染三本体 + 目标激活分（0.25·domainHit + 0.35·bridgeHit + 0.40·sim）补上 goal/value 语义远距联想；v0.1.7 检索图方案——写侧机制渲染成四轴记忆地图（情境/目标/档案轴+证据层）注入读侧，认知主体按图回溯、memory_read/journal 下钻证据；序时账留痕、情景归档、低置信降权遗忘；memory_append / memory_read / memory_consolidate + linghun_goal_update / linghun_goal_get / linghun_goal_state 读写沉淀闭环。LoCoMo-Plus 16/16 满分（官方 Memory Awareness Judge）。不是人设卡，是判断力——给 DeepSeek Harness 装上收口器。",
+  "version": "0.5.0",
+  "description": "灵魂（Linghun）记忆体方案（DSH 插件）——v0.4.0 定位回归：memory 回归记忆定位、收口者回到 linghun 侧（不再注入身份/判断 section，只注册记忆 section soul:linghun-memory）。成本硬伤简化：记忆体依赖未发布的公共包会断安装/评测链路，发布期改为自包含——海马体以 vendor/hippocampus.js 副本打入发布包（开发期真源为三方共享单例 dsh-hippocampus，scripts/sync-vendor.mjs 同步），零 npm 依赖、零审核等待、评测钉版不受影响。LoCoMo-Plus 全量 401 题（m401v4 程序化索引画像）acc 92.52%（371/401，+17.21pp），闭卷基线 75.31%、开卷 94.76%，画像成本归零（87%→0）只比开卷低 2.24pp。核心能力：记忆完全本体化（事件/事实/规则三型→三本体）、暖态/冷储/情景、目标系统 goal.js（16/16 满分）、人物画像层（六槽）、本体资源池、记忆地图、ACC 主动模式。不是人设卡，是记忆体。",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -26,10 +26,13 @@
     "ontology.js",
     "identity.js",
     "memory.js",
+    "graph.js",
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    "map.js"
+    "map.js",
+    "vendor/hippocampus.js",
+    "docs/"
   ],
   "homepage": "https://github.com/syyr1987/dsh-linghun-memory",
   "keywords": [
